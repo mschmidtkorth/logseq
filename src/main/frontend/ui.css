@@ -139,7 +139,8 @@
 
     &:hover {
       color: var(--ls-link-text-color);
-    }
+      opacity: .8;
+	}
   }
 
   &.p-1 {
