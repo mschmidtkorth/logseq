@@ -13,35 +13,11 @@
             [frontend.format :as format]
             [frontend.state :as state]
             [frontend.util :as util :refer [react]]
-            [medley.core :as medley]))
+            [medley.core :as medley]
+            [frontend.db.rules :refer [rules]]))
 
 ;; TODO: extract to specific models and move data transform logic to the
 ;; correponding handlers.
-
-(def rules
-  '[[(parent ?p ?c)
-     [?c :block/parent ?p]]
-    [(parent ?p ?c)
-     [?c :block/parent ?t]
-     (parent ?p ?t)]
-
-    ;; from https://stackoverflow.com/questions/43784258/find-entities-whose-ref-to-many-attribute-contains-all-elements-of-input
-    ;; Quote:
-    ;; You're tackling the general problem of 'dynamic conjunction' in Datomic's Datalog.
-    ;; Write a dynamic Datalog query which uses 2 negations and 1 disjunction or a recursive rule
-    ;; Datalog has no direct way of expressing dynamic conjunction (logical AND / 'for all ...' / set intersection).
-    ;; However, you can achieve it in pure Datalog by combining one disjunction
-    ;; (logical OR / 'exists ...' / set union) and two negations, i.e
-    ;; (For all ?g in ?Gs p(?e,?g)) <=> NOT(Exists ?g in ?Gs, such that NOT(p(?e, ?g)))
-
-    ;; [(matches-all ?e ?a ?vs)
-    ;;  [(first ?vs) ?v0]
-    ;;  [?e ?a ?v0]
-    ;;  (not-join [?e ?vs]
-    ;;            [(identity ?vs) [?v ...]]
-    ;;            (not-join [?e ?v]
-    ;;                      [?e ?a ?v]))]
-    ])
 
 ;; Use it as an input argument for datalog queries
 (defonce block-attrs
@@ -146,15 +122,6 @@
       :where
       [?page :block/name]]
     (conn/get-conn repo)))
-
-(defn get-modified-pages
-  [repo]
-  (-> (d/q
-       '[:find ?page-name
-         :where
-         [?page :block/original-name ?page-name]]
-       (conn/get-conn repo))
-      (db-utils/seq-flatten)))
 
 (defn get-page-alias
   [repo page-name]
@@ -1211,6 +1178,12 @@
          (reset! blocks-count-cache n)
          n)))))
 
+(defn get-all-block-uuids
+  []
+  (when-let [conn (conn/get-conn)]
+    (->> (d/datoms conn :avet :block/uuid)
+         (map :v))))
+
 ;; block/uuid and block/content
 (defn get-all-block-contents
   []
@@ -1372,3 +1345,15 @@
                               '[:db/id :block/name :block/original-name
                                 {:block/file [:db/id :file/path]}]
                               ids))))))
+
+(defn get-latest-changed-pages
+  [repo]
+  (->>
+   (d/q
+     '[:find [(pull ?page [:block/name :block/file :block/updated-at]) ...]
+       :where
+       [?page :block/name]]
+     (conn/get-conn repo))
+   (filter :block/file)
+   (sort-by :block/updated-at >)
+   (take 200)))

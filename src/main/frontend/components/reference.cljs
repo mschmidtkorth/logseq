@@ -1,21 +1,19 @@
 (ns frontend.components.reference
-  (:require [rum.core :as rum]
-            [frontend.util :as util]
-            [frontend.state :as state]
-            [clojure.string :as string]
-            [frontend.db :as db]
+  (:require [clojure.string :as string]
             [frontend.components.block :as block]
-            [frontend.ui :as ui]
             [frontend.components.content :as content]
-            [frontend.date :as date]
             [frontend.components.editor :as editor]
-            [frontend.db-mixins :as db-mixins]
-            [clojure.string :as string]
-            [frontend.config :as config]
             [frontend.components.svg :as svg]
-            [frontend.handler.page :as page-handler]
+            [frontend.date :as date]
+            [frontend.db :as db]
+            [frontend.db-mixins :as db-mixins]
             [frontend.handler.block :as block-handler]
-            [medley.core :as medley]))
+            [frontend.handler.page :as page-handler]
+            [frontend.state :as state]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [medley.core :as medley]
+            [rum.core :as rum]))
 
 (rum/defc filter-dialog-inner < rum/reactive
   [filters-atom close-fn references page-name]
@@ -30,20 +28,20 @@
    (when (seq references)
      (let [filters (rum/react filters-atom)]
        [:div.mt-5.sm:mt-4.sm:flex.sm.gap-1.flex-wrap
-       (for [reference references]
-         (let [lc-reference (string/lower-case reference)
-               filtered (get filters lc-reference)
-               color (condp = filtered
-                       true "text-green-400"
-                       false "text-red-400"
-                       nil)]
-           [:button.border.rounded.px-1.mb-1.mr-1 {:key reference :class color :style {:border-color "currentColor"}
-                                                   :on-click (fn [e]
-                                                               (swap! filters-atom #(if (nil? (get filters lc-reference))
-                                                                                      (assoc % lc-reference (not (.-shiftKey e)))
-                                                                                      (dissoc % lc-reference)))
-                                                               (page-handler/save-filter! page-name @filters-atom))}
-            reference]))]))])
+        (for [reference references]
+          (let [lc-reference (string/lower-case reference)
+                filtered (get filters lc-reference)
+                color (condp = filtered
+                        true "text-green-400"
+                        false "text-red-400"
+                        nil)]
+            [:button.border.rounded.px-1.mb-1.mr-1 {:key reference :class color :style {:border-color "currentColor"}
+                                                    :on-click (fn [e]
+                                                                (swap! filters-atom #(if (nil? (get filters lc-reference))
+                                                                                       (assoc % lc-reference (not (.-shiftKey e)))
+                                                                                       (dissoc % lc-reference)))
+                                                                (page-handler/save-filter! page-name @filters-atom))}
+             reference]))]))])
 
 (defn filter-dialog
   [filters-atom references page-name]
@@ -54,11 +52,11 @@
   [block level]
   (if (:block/children block)
     (-> (update block :block/children
-             (fn [blocks]
-               (map (fn [block]
-                      (let [level (inc level)
-                            block (assoc block :ref/level level)]
-                        (block-with-ref-level block level))) blocks)))
+                (fn [blocks]
+                  (map (fn [block]
+                         (let [level (inc level)
+                               block (assoc block :ref/level level)]
+                           (block-with-ref-level block level))) blocks)))
         (assoc :ref/level level))
     (assoc block :ref/level level)))
 
@@ -88,69 +86,74 @@
                        :else
                        (db/get-page-referenced-blocks page-name))
           ref-pages (map (comp :block/original-name first) ref-blocks)
+          references (db/get-page-linked-refs-refed-pages repo page-name)
+          references (->> (concat ref-pages references)
+                          (remove nil?)
+                          (distinct))
           scheduled-or-deadlines (if (and journal?
                                           (not (true? (state/scheduled-deadlines-disabled?)))
                                           (= page-name (string/lower-case (date/journal-name))))
                                    (db/get-date-scheduled-or-deadlines (string/capitalize page-name))
                                    nil)
-          references (db/get-page-linked-refs-refed-pages repo page-name)
-          references (->> (concat ref-pages references)
-                          (remove nil?)
-                          (distinct))
-          filter-state (rum/react filters-atom)
-          filters (when (seq filter-state)
-                    (->> (group-by second filter-state)
-                         (medley/map-vals #(map first %))))
-          filtered-ref-blocks (->> (block-handler/filter-blocks repo ref-blocks filters true)
-                                   blocks-with-ref-level)
-          n-ref (apply +
-                 (for [[_ rfs] filtered-ref-blocks]
-                   (count rfs)))]
-      (when (or (> n-ref 0)
-                (seq scheduled-or-deadlines)
-                (seq filter-state))
-        [:div.references.mt-6.flex-1.flex-row
-         [:div.content
-          (when (seq scheduled-or-deadlines)
-            (ui/foldable
-             [:h2.font-bold.opacity-50 "SCHEDULED AND DEADLINE"]
-             [:div.references-blocks.mb-6
-              (let [ref-hiccup (block/->hiccup scheduled-or-deadlines
-                                               {:id (str page-name "-agenda")
-                                                :ref? true
-                                                :group-by-page? true
-                                                :editor-box editor/box}
-                                               {})]
-                (content/content page-name
-                                 {:hiccup ref-hiccup}))]))
+          threshold (state/get-linked-references-collapsed-threshold)]
+      (let [filter-state (rum/react filters-atom)
+            filters (when (seq filter-state)
+                      (->> (group-by second filter-state)
+                           (medley/map-vals #(map first %))))
+            filtered-ref-blocks (->> (block-handler/filter-blocks repo ref-blocks filters true)
+                                     blocks-with-ref-level)
+            n-ref (apply +
+                    (for [[_ rfs] filtered-ref-blocks]
+                      (count rfs)))]
+        (when (or (> n-ref 0)
+                  (seq scheduled-or-deadlines)
+                  (seq filter-state))
+          [:div.references.mt-6.flex-1.flex-row
+           [:div.content
+            (when (seq scheduled-or-deadlines)
+              (ui/foldable
+               [:h2.font-bold.opacity-50 "SCHEDULED AND DEADLINE"]
+               [:div.references-blocks.mb-6
+                (let [ref-hiccup (block/->hiccup scheduled-or-deadlines
+                                                 {:id (str page-name "-agenda")
+                                                  :ref? true
+                                                  :group-by-page? true
+                                                  :editor-box editor/box}
+                                                 {})]
+                  (content/content page-name
+                                   {:hiccup ref-hiccup}))]
+               {}))
 
-          (when (or (> n-ref 0)
-                    (seq filter-state))
-            (ui/foldable
-             [:div.flex.flex-row.flex-1.justify-between
-              [:h2.font-bold.opacity-50 (let []
-                                          (str n-ref " Linked Reference"
-                                               (if (> n-ref 1) "s")))]
-              [:a.opacity-50.hover:opacity-100.filter
-               {:title "Filter"
-                :on-click #(state/set-modal! (filter-dialog filters-atom references page-name))}
-               (svg/filter-icon (cond
-                                  (empty? filter-state) nil
-                                  (every? true? (vals filter-state)) "text-green-400"
-                                  (every? false? (vals filter-state)) "text-red-400"
-                                  :else "text-yellow-400"))]]
+            (when (or (> n-ref 0)
+                      (seq filter-state))
+              (ui/foldable
+               [:div.flex.flex-row.flex-1.justify-between
+                [:h2.font-bold.opacity-50 (let []
+                                            (str n-ref " Linked Reference"
+                                                 (when (> n-ref 1) "s")))]
+                [:a.opacity-50.hover:opacity-100.filter
+                 {:title "Filter"
+                  :on-click #(state/set-modal! (filter-dialog filters-atom references page-name))}
+                 (svg/filter-icon (cond
+                                    (empty? filter-state) nil
+                                    (every? true? (vals filter-state)) "text-green-400"
+                                    (every? false? (vals filter-state)) "text-red-400"
+                                    :else "text-yellow-400"))]]
 
-             [:div.references-blocks
-              (let [ref-hiccup (block/->hiccup filtered-ref-blocks
-                                               {:id page-name
-                                                :ref? true
-                                                :breadcrumb-show? true
-                                                :group-by-page? true
-                                                :editor-box editor/box
-                                                :filters filters}
-                                               {})]
-                (content/content page-name
-                                 {:hiccup ref-hiccup}))]))]]))))
+               (fn []
+                 [:div.references-blocks
+                  (let [ref-hiccup (block/->hiccup filtered-ref-blocks
+                                                   {:id page-name
+                                                    :ref? true
+                                                    :breadcrumb-show? true
+                                                    :group-by-page? true
+                                                    :editor-box editor/box
+                                                    :filters filters}
+                                                   {})]
+                    (content/content page-name
+                                     {:hiccup ref-hiccup}))])
+
+               {:default-collapsed? (>= n-ref threshold)}))]])))))
 
 (rum/defcs unlinked-references-aux
   < rum/reactive db-mixins/query
@@ -159,10 +162,10 @@
      (fn [state]
        (reset! (second (:rum/args state))
                (apply +
-                      (for [[_ rfs]
-                            (db/get-page-unlinked-references
-                             (first (:rum/args state)))]
-                        (count rfs))))
+                 (for [[_ rfs]
+                       (db/get-page-unlinked-references
+                        (first (:rum/args state)))]
+                   (count rfs))))
        (render-fn state)))}
   [state page-name n-ref]
   (let [ref-blocks (db/get-page-unlinked-references page-name)]
@@ -187,8 +190,8 @@
           (ui/foldable
            [:h2.font-bold {:style {:opacity "0.3"}}
             (if @n-ref
-              (str @n-ref " Unlinked Reference" (if (> @n-ref 1)
+              (str @n-ref " Unlinked Reference" (when (> @n-ref 1)
                                                   "s"))
               "Unlinked References")]
            (fn [] (unlinked-references-aux page-name n-ref))
-           true)]]))))
+           {:default-collapsed? true})]]))))

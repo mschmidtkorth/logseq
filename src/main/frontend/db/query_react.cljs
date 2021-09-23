@@ -1,20 +1,18 @@
 (ns frontend.db.query-react
   "Custom queries."
-  (:require [datascript.core :as d]
-            [frontend.db.utils :as db-utils :refer [date->int]]
-            [frontend.db.model :as model]
-            [frontend.debug :as debug]
-            [cljs-time.core :as t]
-            [cljs-time.coerce :as tc]
-            [frontend.state :as state]
+  (:require [cljs-time.core :as t]
             [clojure.string :as string]
-            [cljs.reader :as reader]
-            [frontend.extensions.sci :as sci]
-            [lambdaisland.glogi :as log]
-            [frontend.util :as util]
+            [clojure.walk :as walk]
+            [frontend.config :as config]
+            [frontend.db.model :as model]
             [frontend.db.react :as react]
+            [frontend.db.utils :as db-utils :refer [date->int]]
+            [frontend.debug :as debug]
+            [frontend.extensions.sci :as sci]
+            [frontend.state :as state]
             [frontend.text :as text]
-            [clojure.walk :as walk]))
+            [frontend.util :as util]
+            [lambdaisland.glogi :as log]))
 
 (defn- resolve-input
   [input]
@@ -117,17 +115,18 @@
 
 (defn react-query
   [repo {:keys [query inputs] :as query'} query-opts]
-  (debug/pprint "================")
-  (debug/pprint "Use the following to debug your datalog queries:")
-  (debug/pprint query')
-  (try
-    (let [query (resolve-query query)
-          inputs (map resolve-input inputs)
-          repo (or repo (state/get-current-repo))
-          k [:custom query']]
-      (debug/pprint "inputs (post-resolution):" inputs)
-      (debug/pprint "query-opts:" query-opts)
-      (apply react/q repo k query-opts query inputs))
-    (catch js/Error e
-      (debug/pprint "Custom query failed: " {:query query'})
-      (js/console.dir e))))
+  (let [pprint (if config/dev? (fn [_] nil) debug/pprint)]
+    (pprint "================")
+    (pprint "Use the following to debug your datalog queries:")
+    (pprint query')
+    (try
+      (let [query (resolve-query query)
+            inputs (map resolve-input inputs)
+            repo (or repo (state/get-current-repo))
+            k [:custom query']]
+        (pprint "inputs (post-resolution):" inputs)
+        (pprint "query-opts:" query-opts)
+        (apply react/q repo k query-opts query inputs))
+      (catch js/Error e
+        (pprint "Custom query failed: " {:query query'})
+        (js/console.dir e)))))

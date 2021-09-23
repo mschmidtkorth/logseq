@@ -1,15 +1,16 @@
 (ns frontend.fs.node
-  (:require [frontend.fs.protocol :as protocol]
-            [frontend.util :as util]
-            [frontend.db :as db]
-            [clojure.string :as string]
-            [promesa.core :as p]
+  (:require [clojure.string :as string]
             [electron.ipc :as ipc]
-            [cljs-bean.core :as bean]
+            [frontend.config :as config]
+            [frontend.db :as db]
+            [frontend.encrypt :as encrypt]
+            [frontend.fs.protocol :as protocol]
+            [frontend.state :as state]
+            [frontend.util :as util]
             [goog.object :as gobj]
             [lambdaisland.glogi :as log]
-            [frontend.config :as config]
-            [frontend.handler.notification :as notification]))
+            [promesa.core :as p]
+            [frontend.debug :as debug]))
 
 (defn concat-path
   [dir path]
@@ -25,9 +26,17 @@
          (when path
            (str "/" (string/replace path #"^/" ""))))))
 
+(defn- contents-matched?
+  [disk-content db-content]
+  (when (and (string? disk-content) (string? db-content))
+    (if (encrypt/encrypted-db? (state/get-current-repo))
+      (p/let [decrypted-content (encrypt/decrypt disk-content)]
+        (= (string/trim decrypted-content) (string/trim db-content)))
+      (p/resolved (= (string/trim disk-content) (string/trim db-content))))))
+
 (defn- write-file-impl!
-  [this repo dir path content {:keys [ok-handler error-handler skip-mtime?] :as opts} stat]
-  (if skip-mtime?
+  [this repo dir path content {:keys [ok-handler error-handler skip-compare?] :as opts} stat]
+  (if skip-compare?
     (p/catch
         (p/let [result (ipc/ipc "writeFile" path content)]
           (when ok-handler
@@ -37,45 +46,50 @@
             (error-handler error)
             (log/error :write-file-failed error))))
 
-    (p/let [disk-mtime (when stat (gobj/get stat "mtime"))
-            db-mtime (db/get-file-last-modified-at repo path)
-            file-exists? (-> (protocol/stat this dir path)
-                             (p/catch (fn [_error] false)))
-            disk-content (-> (protocol/read-file this dir path nil)
-                             (p/catch (fn [error] nil)))
+    (p/let [disk-content (when (not= stat :not-found)
+                           (-> (protocol/read-file this dir path nil)
+                               (p/catch (fn [error]
+                                          (js/console.error error)
+                                          nil))))
             disk-content (or disk-content "")
             ext (string/lower-case (util/get-file-ext path))
             file-page (db/get-file-page-id path)
-            page-empty? (and file-page (db/page-empty? repo file-page))]
+            page-empty? (and file-page (db/page-empty? repo file-page))
+            db-content (or (db/get-file repo path) "")
+            contents-matched? (contents-matched? disk-content db-content)
+            pending-writes (state/get-write-chan-length)]
       (cond
-        ;; (and (not page-empty?) (nil? disk-content) )
-        ;; (notification/show!
-        ;;  (str "The file has been renamed or deleted on your local disk! File path: " path
-        ;;       ", please save your changes and click the refresh button to reload it.")
-        ;;  :error
-        ;;  false)
-
         (and
-         file-exists?
-         (not= disk-mtime db-mtime)
-         (not= (string/trim disk-content) (string/trim content))
-         ;; FIXME:
-         (not (contains? #{"excalidraw" "edn"} ext)))
-        (notification/show!
-         (str "The file has been modified on your local disk! File path: " path
-              ", please save your changes and click the refresh button to reload it.")
-         :warning
-         false)
+         (not= stat :not-found)         ; file on the disk was deleted
+         (not contents-matched?)
+         (not (contains? #{"excalidraw" "edn"} ext))
+         (not (string/includes? path "/.recycle/"))
+         (zero? pending-writes))
+        (do
+          (when (util/electron?)
+            (debug/set-ack-step! path :saved-successfully)
+            (debug/ack-file-write! path))
+          (state/pub-event! [:file/not-matched-from-disk path disk-content content]))
 
         :else
         (->
          (p/let [result (ipc/ipc "writeFile" path content)
                  mtime (gobj/get result "mtime")]
+           (when (util/electron?)
+             (debug/set-ack-step! path :saved-successfully)
+             (debug/ack-file-write! path))
            (db/set-file-last-modified-at! repo path mtime)
+           (p/let [content (if (encrypt/encrypted-db? (state/get-current-repo))
+                             (encrypt/decrypt content)
+                             content)]
+             (db/set-file-content! repo path content))
            (when ok-handler
              (ok-handler repo path result))
            result)
          (p/catch (fn [error]
+                    (state/pub-event! [:instrument {:type :debug/write-failed
+                                                    :payload {:step :ipc-write-file
+                                                              :error error}}])
                     (if error-handler
                       (error-handler error)
                       (log/error :write-file-failed error)))))))))
@@ -102,7 +116,7 @@
     (let [path (concat-path dir path)]
       (p/let [stat (p/catch
                        (protocol/stat this dir path)
-                       (fn [_e] nil))
+                       (fn [_e] :not-found))
               sub-dir (first (util/get-dir-and-basename path))
               _ (protocol/mkdir-recur! this sub-dir)]
         (write-file-impl! this repo dir path content opts stat))))

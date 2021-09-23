@@ -1,24 +1,27 @@
 (ns frontend.state
-  (:require [frontend.storage :as storage]
-            [rum.core :as rum]
-            [frontend.util :as util :refer [profile]]
-            [frontend.util.cursor :as cursor]
-            [clojure.string :as string]
-            [cljs-bean.core :as bean]
-            [medley.core :as medley]
-            [goog.object :as gobj]
-            [goog.dom :as gdom]
-            [dommy.core :as dom]
-            [cljs.core.async :as async]
-            [lambdaisland.glogi :as log]
+  (:require [cljs-bean.core :as bean]
             [cljs-time.core :as t]
-            [promesa.core :as p]
+            [cljs-time.format :as tf]
+            [cljs.core.async :as async]
+            [clojure.string :as string]
+            [dommy.core :as dom]
             [electron.ipc :as ipc]
-            [cljs-time.format :as tf]))
+            [frontend.storage :as storage]
+            [frontend.util :as util]
+            [frontend.util.cursor :as cursor]
+            [goog.dom :as gdom]
+            [goog.object :as gobj]
+            [lambdaisland.glogi :as log]
+            [medley.core :as medley]
+            [promesa.core :as p]
+            [rum.core :as rum]))
 
 (defonce ^:private state
-  (atom
-   (let [document-mode? (or (storage/get :document/mode?) false)]
+  (let [document-mode? (or (storage/get :document/mode?) false)
+        current-graph (let [graph (storage/get :git/current-repo)]
+                        (when graph (ipc/ipc "setCurrentGraph" graph))
+                        graph)]
+    (atom
      {:route-match nil
       :today nil
       :system/events (async/chan 100)
@@ -38,7 +41,7 @@
       :network/online? true
       :indexeddb/support? true
       :me nil
-      :git/current-repo (storage/get :git/current-repo)
+      :git/current-repo current-graph
       :git/status {}
       :format/loading {}
       :draw? false
@@ -69,6 +72,7 @@
       :ui/file-component nil
       :ui/custom-query-components {}
       :ui/show-recent? false
+      :ui/command-palette-open? false
       :ui/developer-mode? (or (= (storage/get "developer-mode") "true")
                               false)
       ;; remember scroll positions of visited paths
@@ -96,7 +100,7 @@
       :editor/block-dom-id nil
       :editor/set-timestamp-block nil
       :editor/last-input-time nil
-      :editor/new-block-toggle? document-mode?
+      :editor/document-mode? document-mode?
       :editor/args nil
       :db/last-transact-time {}
       :db/last-persist-transact-ids {}
@@ -134,6 +138,9 @@
       :plugin/simple-commands       {}
       :plugin/selected-theme        nil
       :plugin/selected-unpacked-pkg nil
+      :plugin/marketplace-pkgs      nil
+      :plugin/marketplace-stats     nil
+      :plugin/installing            nil
       :plugin/active-readme         nil
 
       ;; pdf
@@ -147,12 +154,22 @@
       ;; copied blocks
       :copy/blocks {:copy/content nil :copy/block-tree nil}
 
-      :copy/export-block-text-indent-style  (atom "dashes")
-      :copy/export-block-text-remove-options (atom #{})
-
+      :copy/export-block-text-indent-style  (or (storage/get :copy/export-block-text-indent-style)
+                                                "dashes")
+      :copy/export-block-text-remove-options (or (storage/get :copy/export-block-text-remove-options)
+                                                 #{})
       :date-picker/date nil
 
-      :view/components {}})))
+      :youtube/players {}
+
+      ;; command palette
+      :command-palette/commands []
+
+      :view/components {}
+
+      :debug/write-acks {}
+
+      :encryption/graph-parsing? false})))
 
 
 (defn sub
@@ -284,7 +301,11 @@
 
 (defn sub-graph-config
   []
-  (:graph/settings (get (sub-config) (get-current-repo))))
+  (get (sub-config) (get-current-repo)))
+
+(defn sub-graph-config-settings
+  []
+  (:graph/settings (sub-graph-config)))
 
 ;; Enable by default
 (defn show-brackets?
@@ -391,7 +412,8 @@
   (swap! state assoc :git/current-repo repo)
   (if repo
     (storage/set :git/current-repo repo)
-    (storage/remove :git/current-repo)))
+    (storage/remove :git/current-repo))
+  (ipc/ipc "setCurrentGraph" repo))
 
 (defn set-preferred-format!
   [format]
@@ -678,7 +700,7 @@
               (fn [{:keys [installation_id] :as repo}]
                 (let [{:keys [token] :as m} (get tokens installation_id)]
                   (if (string? token)
-                    ;; Github API returns a expires_at key which is a timestamp (expires after 60 minutes at present),
+                    ;; GitHub API returns a expires_at key which is a timestamp (expires after 60 minutes at present),
                     ;; however, user's system time may be inaccurate. Here, based on the client system time, we use
                     ;; 40-minutes interval to deal with some critical conditions, for e.g. http request time consume.
                     (let [formatter (tf/formatters :date-time-no-ms)
@@ -740,6 +762,10 @@
 (defn get-sidebar-blocks
   []
   (:sidebar/blocks @state))
+
+(defn clear-sidebar-blocks!
+  []
+  (set-state! :sidebar/blocks '()))
 
 (defn sidebar-block-toggle-collapse!
   [db-id]
@@ -948,11 +974,6 @@
   ([path]
    (get-in @state [:ui/paths-scroll-positions path] 0)))
 
-(defn get-journal-template
-  []
-  (when-let [repo (get-current-repo)]
-    (get-in @state [:config repo :default-templates :journals])))
-
 (defn set-today!
   [value]
   (set-state! :today value))
@@ -1046,14 +1067,21 @@
   [value]
   (set-state! :indexeddb/support? value))
 
+(defn modal-opened?
+  []
+  (:modal/show? @state))
+
 (defn set-modal!
   ([modal-panel-content]
-   (set-modal! modal-panel-content false))
-  ([modal-panel-content fullscreen?]
+   (set-modal! modal-panel-content
+               {:fullscreen? false
+                :close-btn?  true}))
+  ([modal-panel-content {:keys [fullscreen? close-btn?]}]
    (swap! state assoc
           :modal/show? (boolean modal-panel-content)
           :modal/panel-content modal-panel-content
-          :modal/fullscreen? fullscreen?)))
+          :modal/fullscreen? fullscreen?
+          :modal/close-btn? close-btn?)))
 
 (defn close-modal!
   []
@@ -1102,20 +1130,20 @@
   []
   (get @state :notification/contents))
 
-(defn get-new-block-toggle?
+(defn document-mode?
   []
-  (get @state :editor/new-block-toggle?))
+  (get @state :document/mode?))
 
-(defn toggle-new-block-shortcut!
+(defn doc-mode-enter-for-new-line?
   []
-  (update-state! :editor/new-block-toggle? not))
+  (and (document-mode?)
+       (not (:shortcut/doc-mode-enter-for-new-block? (sub-graph-config)))))
 
 (defn toggle-document-mode!
   []
-  (let [mode (get @state :document/mode?)]
+  (let [mode (document-mode?)]
     (set-state! :document/mode? (not mode))
-    (storage/set :document/mode? (not mode)))
-  (toggle-new-block-shortcut!))
+    (storage/set :document/mode? (not mode))))
 
 (defn enable-tooltip?
   []
@@ -1355,6 +1383,14 @@
        value))
    2))
 
+(defn get-linked-references-collapsed-threshold
+  []
+  (or
+   (when-let [value (:ref/linked-references-collapsed-threshold (get-config))]
+     (when (integer? value)
+       value))
+   100))
+
 (defn get-events-chan
   []
   (:system/events @state))
@@ -1377,9 +1413,21 @@
 (defn get-export-block-text-indent-style []
   (:copy/export-block-text-indent-style @state))
 
+(defn set-export-block-text-indent-style!
+  [v]
+  (set-state! :copy/export-block-text-indent-style v)
+  (storage/set :copy/export-block-text-indent-style v))
+
 (defn get-export-block-text-remove-options []
   (:copy/export-block-text-remove-options @state))
 
+(defn update-export-block-text-remove-options!
+  [e k]
+  (let [f (if (util/echecked? e) conj disj)]
+    (update-state! :copy/export-block-text-remove-options
+                   #(f % k))
+    (storage/set :copy/export-block-text-remove-options
+                 (get-export-block-text-remove-options))))
 
 (defn set-editor-args!
   [args]
@@ -1449,3 +1497,7 @@
 
 (defn remove-watch-state [key]
   (remove-watch state key))
+
+(defn get-git-auto-commit-enabled?
+  []
+  (false? (sub [:electron/user-cfgs :git/disable-auto-commit?])))

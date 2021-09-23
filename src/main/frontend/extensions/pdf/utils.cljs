@@ -152,10 +152,23 @@
   (let [rge-rects (bean/->clj (.getClientRects r))
         ^js cnt-offset (.getBoundingClientRect page-cnt)]
 
-    (if (seq rge-rects)
+    (when (seq rge-rects)
       (let [rects (for [rect rge-rects]
                     {:top    (- (+ (.-top rect) (.-scrollTop page-cnt)) (.-top cnt-offset))
                      :left   (- (+ (.-left rect) (.-scrollLeft page-cnt)) (.-left cnt-offset))
                      :width  (.-width rect)
                      :height (.-height rect)})]
         (optimize-client-reacts rects)))))
+
+;; TODO: which viewer instance?
+(defn next-page
+  []
+  (try
+    (js-invoke js/window.lsPdfViewer "nextPage")
+    (catch js/Error e nil)))
+
+(defn prev-page
+  []
+  (try
+    (js-invoke js/window.lsPdfViewer "previousPage")
+    (catch js/Error e nil)))

@@ -1,13 +1,11 @@
 (ns frontend.db.query-dsl-test
-  (:require [frontend.db.query-dsl :as dsl]
-            [frontend.db :as db]
-            [frontend.db.conn :as conn]
-            [frontend.db.config :refer [test-db] :as config]
+  (:require [cljs.test :refer [are async deftest testing use-fixtures]]
             [datascript.core :as d]
-            [frontend.db-schema :as schema]
+            [frontend.db :as db]
+            [frontend.db.config :refer [test-db] :as config]
+            [frontend.db.query-dsl :as dsl]
             [frontend.handler.repo :as repo-handler]
-            [promesa.core :as p]
-            [cljs.test :refer [deftest is are testing use-fixtures run-tests async]]))
+            [promesa.core :as p]))
 
 ;; TODO: quickcheck
 ;; 1. generate query filters
@@ -321,7 +319,7 @@ last-modified-at:: 1609084800002"}]]
       "(not [[page 1]])"
       {:query '([?b :block/uuid]
                 (not [?b :block/path-refs [:block/name "page 1"]]))
-       :count 33}))
+       :count 34}))
 
   (testing "Between query"
     (are [x y] (= (count-only x) y)
@@ -369,7 +367,7 @@ last-modified-at:: 1609084800002"}]]
                   (and [?b :block/path-refs [:block/name "page 1"]])
                   (and [?b :block/path-refs [:block/name "page 2"]])
                   [?b])))
-       :count 36})
+       :count 37})
 
     ;; FIXME: not working
     ;; (are [x y] (= (q-count x) y)

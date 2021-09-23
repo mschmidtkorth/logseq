@@ -1,18 +1,18 @@
 (ns frontend.modules.shortcut.config
   (:require [frontend.components.commit :as commit]
+            [frontend.extensions.srs.handler :as srs]
+            [frontend.extensions.pdf.utils :as pdf-utils]
             [frontend.handler.config :as config-handler]
             [frontend.handler.editor :as editor-handler]
             [frontend.handler.history :as history]
-            [frontend.handler.repo :as repo-handler]
             [frontend.handler.page :as page-handler]
             [frontend.handler.route :as route-handler]
             [frontend.handler.search :as search-handler]
             [frontend.handler.ui :as ui-handler]
-            [frontend.handler.web.nfs :as nfs-handler]
-            [frontend.extensions.srs.handler :as srs]
+            [frontend.handler.plugin :as plugin-handler]
             [frontend.modules.shortcut.before :as m]
             [frontend.state :as state]
-            [frontend.util :refer [mac?]]))
+            [frontend.util :refer [mac?] :as util]))
 
 ;; TODO: how to extend this for plugins usage? An atom?
 (def default-config
@@ -37,6 +37,17 @@
     {:desc    "Date picker: Select next week"
      :binding "down"
      :fn      ui-handler/shortcut-next-week}}
+
+   :shortcut.handler/pdf
+   ^{:before m/prevent-default-behavior}
+   {:pdf/previous-page
+    {:desc    "Previous page of current pdf doc"
+     :binding "ctrl+p"
+     :fn      pdf-utils/prev-page}
+    :pdf/next-page
+    {:desc    "Next page of current pdf doc"
+     :binding "ctrl+n"
+     :fn      pdf-utils/next-page}}
 
    :shortcut.handler/auto-complete
    {:auto-complete/complete
@@ -128,10 +139,6 @@
     {:desc    "Strikethrough"
      :binding "mod+shift+s"
      :fn      editor-handler/strike-through-format!}
-    :editor/insert-link
-    {:desc    "HTML Link"
-     :binding "mod+k"
-     :fn      editor-handler/html-link-format!}
     :editor/move-block-up
     {:desc    "Move block up"
      :binding (if mac? "mod+shift+up"  "alt+shift+up")
@@ -238,7 +245,7 @@
      :binding "shift+tab"
      :fn      (editor-handler/keydown-tab-handler :left)}
     :editor/copy
-    {:desc    "Copy"
+    {:desc    "Copy (copies either selection, or block reference)"
      :binding "mod+c"
      :fn      editor-handler/shortcut-copy}
     :editor/cut
@@ -252,16 +259,15 @@
     :editor/redo
     {:desc    "Redo"
      :binding ["shift+mod+z" "mod+y"]
-     :fn      history/redo!}
-    ;; FIXME
-    ;; save in block editing only doesn't seems needed?
-    :editor/save
-    {:binding "mod+s"
-     :fn      editor-handler/save!}}
+     :fn      history/redo!}}
 
    :shortcut.handler/global-prevent-default
    ^{:before m/prevent-default-behavior}
-   {:editor/select-all-blocks
+   {:editor/insert-link
+    {:desc    "HTML Link"
+     :binding "mod+l"
+     :fn      editor-handler/html-link-format!}
+    :editor/select-all-blocks
     {:desc    "Select all blocks"
      :binding "mod+shift+a"
      :fn      editor-handler/select-all-blocks!}
@@ -279,11 +285,11 @@
      :fn      config-handler/toggle-ui-show-brackets!}
     :go/search-in-page
     {:desc    "Search in the current page"
-     :binding "mod+shift+u"
+     :binding ["mod+shift+k" "mod+shift+u"]
      :fn      #(route-handler/go-to-search! :page)}
     :go/search
     {:desc    "Full text search"
-     :binding "mod+u"
+     :binding ["mod+k" "mod+u"]
      :fn      #(route-handler/go-to-search! :global)}
     :go/journals
     {:desc    "Jump to journals"
@@ -301,22 +307,39 @@
     {:desc    "Rebuild search index"
      :binding "mod+c mod+s"
      :fn      search-handler/rebuild-indices!}
-    :graph/re-index
-    {:desc    "Re-index the whole graph"
-     :binding "mod+c mod+r"
-     :fn      #(repo-handler/re-index!
-                nfs-handler/rebuild-index!
-                page-handler/create-today-journal!)}}
+    :sidebar/open-today-page
+    {:desc    "Open today's page in the right sidebar"
+     :binding (if mac? "mod+shift+j" "alt+shift+j")
+     :fn      page-handler/open-today-in-sidebar}
+    :sidebar/clear
+    {:desc    "Clear all in the right sidebar"
+     :binding "mod+c mod+c"
+     :fn      #(do
+                 (state/clear-sidebar-blocks!)
+                 (state/hide-right-sidebar!))}}
 
    :shortcut.handler/misc
    ;; always overrides the copy due to "mod+c mod+s"
    {:misc/copy
     {:binding "mod+c"
-     :fn     (fn [] (js/document.execCommand "copy"))}}
+     :fn     (fn [] (js/document.execCommand "copy"))}
+
+    :command-palette/toggle
+    {:desc "Toggle command palette"
+     :binding "mod+shift+p"
+     :fn  (fn [] (state/toggle! :ui/command-palette-open?))}}
 
    :shortcut.handler/global-non-editing-only
    ^{:before m/enable-when-not-editing-mode!}
-   {:ui/toggle-document-mode
+   {:command/run
+    {:desc    "Run git command"
+     :binding "mod+shift+1"
+     :fn      #(state/pub-event! [:command/run])}
+    :go/home
+    {:desc    "Go to home"
+     :binding "g h"
+     :fn      #(route-handler/redirect! {:to :home})}
+    :ui/toggle-document-mode
     {:desc    "Toggle document mode"
      :binding "t d"
      :fn      state/toggle-document-mode!}
@@ -344,6 +367,14 @@
     {:desc    "Toggle wide mode"
      :binding "t w"
      :fn      ui-handler/toggle-wide-mode!}
+    :ui/select-theme-color
+    {:desc    "Select available theme colors"
+     :binding    "t i"
+     :fn      plugin-handler/show-themes-modal!}
+    :ui/goto-plugins
+    {:desc    "Go to plugins dashboard"
+     :binding    "t p"
+     :fn      plugin-handler/goto-plugins-dashboard!}
     :editor/toggle-open-blocks
     {:desc    "Toggle open blocks (collapse or expand all blocks)"
      :binding "t o"
@@ -355,7 +386,7 @@
     ;; :ui/toggle-between-page-and-file route-handler/toggle-between-page-and-file!
     :git/commit
     {:desc    "Git commit message"
-     :binding "g c"
+     :binding "c"
      :fn      commit/show-commit-modal!}}})
 
 
@@ -451,9 +482,13 @@
 
    :shortcut.category/others
    ^{:doc "Others"}
-   [:go/journals
+   [:go/home
+    :go/journals
+    :command/run
+    :command-palette/toggle
+    :sidebar/clear
+    :sidebar/open-today-page
     :search/re-index
-    :graph/re-index
     :auto-complete/prev
     :auto-complete/next
     :auto-complete/complete

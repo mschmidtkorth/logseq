@@ -1,26 +1,24 @@
 (ns frontend.ui
-  (:require [rum.core :as rum]
-            [frontend.rum :as r]
-            ["react-transition-group" :refer [TransitionGroup CSSTransition]]
-            ["react-textarea-autosize" :as TextareaAutosize]
-            ["react-resize-context" :as Resize]
-            ["react-tippy" :as react-tippy]
-            ["react-tweet-embed" :as react-tweet-embed]
-            [frontend.util :as util]
-            [frontend.mixins :as mixins]
-            [frontend.handler.notification :as notification-handler]
-            [frontend.handler.ui :as ui-handler]
-            [frontend.state :as state]
+  (:require [clojure.string :as string]
             [frontend.components.svg :as svg]
-            [clojure.string :as string]
-            [goog.object :as gobj]
-            [goog.dom :as gdom]
-            [medley.core :as medley]
-            [frontend.ui.date-picker]
             [frontend.context.i18n :as i18n]
+            [frontend.handler.notification :as notification-handler]
+            [frontend.mixins :as mixins]
             [frontend.modules.shortcut.core :as shortcut]
+            [frontend.rum :as r]
+            [frontend.state :as state]
+            [frontend.ui.date-picker]
+            [frontend.util :as util]
+            [goog.dom :as gdom]
+            [goog.object :as gobj]
             [lambdaisland.glogi :as log]
-            [frontend.config :as config]))
+            [medley.core :as medley]
+            ["react-resize-context" :as Resize]
+            ["react-textarea-autosize" :as TextareaAutosize]
+            ["react-tippy" :as react-tippy]
+            ["react-transition-group" :refer [CSSTransition TransitionGroup]]
+            ["react-tweet-embed" :as react-tweet-embed]
+            [rum.core :as rum]))
 
 (defonce transition-group (r/adapt-class TransitionGroup))
 (defonce css-transition (r/adapt-class CSSTransition))
@@ -93,19 +91,18 @@
    (fn [{:keys [close-fn] :as state}]
      [:div.py-1.rounded-md.shadow-xs
       (when links-header links-header)
-      (for [{:keys [options title icon]} (if (fn? links) (links) links)]
+      (for [{:keys [options title icon hr]} (if (fn? links) (links) links)]
         (let [new-options
               (assoc options
                      :on-click (fn [e]
                                  (when-let [on-click-fn (:on-click options)]
                                    (on-click-fn e))
                                  (close-fn)))
-              child [:div
-                     {:style {:display "flex" :flex-direction "row"}}
-                     [:div {:style {:margin-right "8px"}} title]
-                      ;; [:div {:style {:position "absolute" :right "8px"}}
-                      ;;  icon]
-                     ]]
+              child (if hr
+                      [:hr.my-1]
+                      [:div
+                       {:style {:display "flex" :flex-direction "row"}}
+                       [:div {:style {:margin-right "8px"}} title]])]
           (rum/with-key
             (menu-link new-options child)
             title)))
@@ -113,12 +110,13 @@
    opts))
 
 (defn button
-  [text & {:keys [background href class intent on-click small?]
-           :or {small? false}
+  [text & {:keys [background href class intent on-click small? large?]
+           :or {small? false large? false}
            :as   option}]
-  (let [klass (if-not intent ".bg-indigo-600.hover:bg-indigo-700.focus:border-indigo-700.active:bg-indigo-700")
+  (let [klass (when-not intent ".bg-indigo-600.hover:bg-indigo-700.focus:border-indigo-700.active:bg-indigo-700")
         klass (if background (string/replace klass "indigo" background) klass)
-        klass (if small? (str klass ".px-2.py-1") klass)]
+        klass (if small? (str klass ".px-2.py-1") klass)
+        klass (if large? (str klass ".text-base") klass)]
     (if href
       [:a.ui__button.is-link
        (merge
@@ -177,7 +175,9 @@
                   "entered" "transition ease-out duration-300 transform translate-y-0 opacity-100 sm:translate-x-0"
                   "exiting" "transition ease-in duration-100 opacity-100"
                   "exited" "transition ease-in duration-100 opacity-0")}
-        [:div.rounded-lg.shadow-xs.overflow-hidden
+        [:div.rounded-lg.shadow-xs {:style {:max-height "calc(100vh - 200px)"
+                                            :overflow-y "scroll"
+                                            :overflow-x "hidden"}}
          [:div.p-4
           [:div.flex.items-start
            [:div.flex-shrink-0
@@ -242,12 +242,12 @@
 (defn inject-document-devices-envs!
   []
   (let [cl (.-classList js/document.documentElement)]
-    (if util/mac? (.add cl "is-mac"))
-    (if util/win32? (.add cl "is-win32"))
-    (if (util/electron?) (.add cl "is-electron"))
-    (if (util/ios?) (.add cl "is-ios"))
-    (if (util/mobile?) (.add cl "is-mobile"))
-    (if (util/safari?) (.add cl "is-safari"))
+    (when util/mac? (.add cl "is-mac"))
+    (when util/win32? (.add cl "is-win32"))
+    (when (util/electron?) (.add cl "is-electron"))
+    (when (util/ios?) (.add cl "is-ios"))
+    (when (util/mobile?) (.add cl "is-mobile"))
+    (when (util/safari?) (.add cl "is-safari"))
     (when (util/electron?)
       (js/window.apis.on "full-screen" #(js-invoke cl (if (= % "enter") "add" "remove") "is-fullscreen")))))
 
@@ -264,9 +264,9 @@
   "fix a common issue about ios webpage viewport
    when soft keyboard setup"
   []
-  (if (and
-       (util/ios?)
-       (not (nil? js/window.visualViewport)))
+  (when (and
+         (util/ios?)
+         (not (nil? js/window.visualViewport)))
     (let [viewport js/visualViewport
           style (get-dynamic-style-node)
           sheet (.-sheet style)
@@ -274,7 +274,7 @@
           set-raf-pending! #(reset! raf-pending? %)
           handler
           (fn []
-            (if-not @raf-pending?
+            (when-not @raf-pending?
               (let [f (fn []
                         (set-raf-pending! false)
                         (let [vh (+ (.-offsetTop viewport) (.-height viewport))
@@ -310,7 +310,7 @@
         keydown-handler (partial handle-global-keystroke true)
         keyup-handler (partial handle-global-keystroke false)
         clear-all #(do (set-global-active-keystroke "")
-                        (reset! active-keystroke #{}))]
+                       (reset! active-keystroke #{}))]
     (.addEventListener js/window "keydown" keydown-handler)
     (.addEventListener js/window "keyup" keyup-handler)
     (.addEventListener js/window "blur" clear-all)
@@ -380,15 +380,15 @@
                  [:div {:key idx}
                   (let [chosen? (= @current-idx idx)]
                     (menu-link
-                      {:id            (str "ac-" idx)
-                       :class         (when chosen? "chosen")
-                       :on-mouse-enter #(reset! current-idx idx)
-                       :on-mouse-down (fn [e]
-                                        (util/stop e)
-                                        (if (and (gobj/get e "shiftKey") on-shift-chosen)
-                                          (on-shift-chosen item)
-                                          (on-chosen item)))}
-                      (if item-render (item-render item chosen?) item)))]]
+                     {:id            (str "ac-" idx)
+                      :class         (when chosen? "chosen")
+                      :on-mouse-enter #(reset! current-idx idx)
+                      :on-mouse-down (fn [e]
+                                       (util/stop e)
+                                       (if (and (gobj/get e "shiftKey") on-shift-chosen)
+                                         (on-shift-chosen item)
+                                         (on-chosen item)))}
+                     (if item-render (item-render item chosen?) item)))]]
 
              (if get-group-name
                (if-let [group-name (get-group-name item)]
@@ -409,23 +409,23 @@
    [:a.ui__toggle {:on-click on-click
                    :class (if small? "is-small" "")}
     [:span.wrapper.transition-colors.ease-in-out.duration-200
-     {:aria-checked "false", :tab-index "0", :role "checkbox"
-      :class        (if on? "bg-indigo-600" "bg-gray-200")}
+     {:aria-checked (if on? "true" "false"), :tab-index "0", :role "checkbox"
+      :class        (if on? "bg-indigo-600" "bg-gray-300")}
      [:span.switcher.transform.transition.ease-in-out.duration-200
       {:class       (if on? (if small? "translate-x-4" "translate-x-5") "translate-x-0")
        :aria-hidden "true"}]]]))
 
 ;; `sequence` can be a list of symbols or strings
 (defn keyboard-shortcut [sequence]
-  [:div.keyboard-shortcut
+  [:span.keyboard-shortcut
    (map-indexed (fn [i key]
-          [:code {:key i}
-           ;; Display "cmd" rather than "meta" to the user to describe the Mac
-           ;; mod key, because that's what the Mac keyboards actually say.
-           (if (or (= :meta key) (= "meta" key))
-             (util/meta-key-name)
-             (name key))])
-        sequence)])
+                  [:code {:key i}
+                   ;; Display "cmd" rather than "meta" to the user to describe the Mac
+                   ;; mod key, because that's what the Mac keyboards actually say.
+                   (if (or (= :meta key) (= "meta" key))
+                     (util/meta-key-name)
+                     (name key))])
+                sequence)])
 
 (defonce modal-show? (atom false))
 (rum/defc modal-overlay
@@ -439,8 +439,13 @@
     :on-click close-fn}
    [:div.absolute.inset-0.opacity-75]])
 
+(rum/defc modal-panel-content <
+  mixins/component-editing-mode
+  [panel-content close-fn]
+  (panel-content close-fn))
+
 (rum/defc modal-panel
-  [panel-content transition-state close-fn fullscreen?]
+  [show? panel-content transition-state close-fn fullscreen? close-btn?]
   [:div.ui__modal-panel.transform.transition-all.sm:min-w-lg.sm
    {:class (case transition-state
              "entering" "ease-out duration-300 opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
@@ -448,20 +453,22 @@
              "exiting" "ease-in duration-200 opacity-100 translate-y-0 sm:scale-100"
              "exited" "ease-in duration-200 opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95")}
    [:div.absolute.top-0.right-0.pt-2.pr-2
-    [:a.ui__modal-close.opacity-60.hover:opacity-100
-     {:aria-label "Close"
-      :type       "button"
-      :on-click   close-fn}
-     [:svg.h-6.w-6
-      {:stroke "currentColor", :view-box "0 0 24 24", :fill "none"}
-      [:path
-       {:d               "M6 18L18 6M6 6l12 12"
-        :stroke-width    "2"
-        :stroke-linejoin "round"
-        :stroke-linecap  "round"}]]]]
+    (when close-btn?
+      [:a.ui__modal-close.opacity-60.hover:opacity-100
+       {:aria-label "Close"
+        :type       "button"
+        :on-click   close-fn}
+       [:svg.h-6.w-6
+        {:stroke "currentColor", :view-box "0 0 24 24", :fill "none"}
+        [:path
+         {:d               "M6 18L18 6M6 6l12 12"
+          :stroke-width    "2"
+          :stroke-linejoin "round"
+          :stroke-linecap  "round"}]]])]
 
-   [:div {:class (if fullscreen? "" "panel-content")}
-    (panel-content close-fn)]])
+   (when show?
+     [:div {:class (if fullscreen? "" "panel-content")}
+      (modal-panel-content panel-content close-fn)])])
 
 (rum/defc modal < rum/reactive
   (mixins/event-mixin
@@ -483,13 +490,14 @@
   []
   (let [modal-panel-content (state/sub :modal/panel-content)
         fullscreen? (state/sub :modal/fullscreen?)
+        close-btn? (state/sub :modal/close-btn?)
         show? (boolean modal-panel-content)
         close-fn (fn []
                    (state/close-modal!)
                    (state/close-settings!))
         modal-panel-content (or modal-panel-content (fn [close] [:div]))]
     [:div.ui__modal
-     {:style {:z-index (if show? 10 -1)}}
+     {:style {:z-index (if show? 100 -1)}}
      (css-transition
       {:in show? :timeout 0}
       (fn [state]
@@ -497,7 +505,7 @@
      (css-transition
       {:in show? :timeout 0}
       (fn [state]
-        (modal-panel modal-panel-content state close-fn fullscreen?)))]))
+        (modal-panel show? modal-panel-content state close-fn fullscreen? close-btn?)))]))
 
 (defn make-confirm-modal
   [{:keys [tag title sub-title sub-checkbox? on-cancel on-confirm]
@@ -564,24 +572,31 @@
   (rum/local false ::collapsed?)
   {:will-mount (fn [state]
                  (let [args (:rum/args state)]
-                   (when (true? (last args))
+                   (when (true? (:default-collapsed? (last args)))
                      (reset! (get state ::collapsed?) true)))
                  state)}
-  [state header content default-collapsed?]
+  [state header content {:keys [default-collapsed? title-trigger?]}]
   (let [control? (get state ::control?)
-        collapsed? (get state ::collapsed?)]
+        collapsed? (get state ::collapsed?)
+        on-mouse-down (fn [e]
+                        (util/stop e)
+                        (swap! collapsed? not))]
     [:div.flex.flex-col
      [:div.content
-      [:div.flex-1.flex-row.foldable-title {:on-mouse-over #(reset! control? true)
-                                            :on-mouse-out  #(reset! control? false)}
+      [:div.flex-1.flex-row.foldable-title (cond->
+                                            {:on-mouse-over #(reset! control? true)
+                                             :on-mouse-out  #(reset! control? false)}
+                                             title-trigger?
+                                             (assoc :on-mouse-down on-mouse-down
+                                                    :class "cursor"))
        [:div.flex.flex-row.items-center
         [:a.block-control.opacity-50.hover:opacity-100.mr-2
-         {:style    {:width       14
-                     :height      16
-                     :margin-left -24}
-          :on-mouse-down (fn [e]
-                           (util/stop e)
-                           (swap! collapsed? not))}
+         (cond->
+          {:style    {:width       14
+                      :height      16
+                      :margin-left -24}}
+           (not title-trigger?)
+           (assoc :on-mouse-down on-mouse-down))
          [:span {:class (if @control? "control-show" "control-hide")}
           (rotating-arrow @collapsed?)]]
         (if (fn? header)
@@ -664,10 +679,10 @@
             (assoc :html (if (or open? mounted?)
                            (try
                              (when-let [html (:html opts)]
-                              (if (fn? html)
-                                (html)
-                                [:div.pr-3.py-1
-                                 html]))
+                               (if (fn? html)
+                                 (html)
+                                 [:div.pr-3.py-1
+                                  html]))
                              (catch js/Error e
                                (log/error :exception e)
                                [:div]))
@@ -690,7 +705,7 @@
   (let [*loading? (:loading? state)]
     [:div [(when @*loading? [:span.flex.items-center [svg/loading " ... loading"]])
            (ReactTweetEmbed
-             {:id                    id
-              :class                 "contents"
-              :options               {:theme (when (= (state/sub :ui/theme) "dark") "dark")}
-              :on-tweet-load-success #(reset! *loading? false)})]]))
+            {:id                    id
+             :class                 "contents"
+             :options               {:theme (when (= (state/sub :ui/theme) "dark") "dark")}
+             :on-tweet-load-success #(reset! *loading? false)})]]))

@@ -1,46 +1,47 @@
 (ns ^:no-doc logseq.api
-  (:require [frontend.db :as db]
-            [frontend.db.model :as db-model]
-            [frontend.db.utils :as db-utils]
-            [frontend.handler.block :as block-handler]
-            [frontend.handler.editor :as editor-handler]
-            [frontend.handler.dnd :as editor-dnd-handler]
-            [frontend.modules.outliner.core :as outliner]
-            [frontend.modules.outliner.tree :as outliner-tree]
-            [frontend.util :as util]
-            [frontend.config :as config]
-            [frontend.util.cursor :as cursor]
-            [electron.ipc :as ipc]
-            [promesa.core :as p]
-            [goog.dom :as gdom]
-            [sci.core :as sci]
-            [lambdaisland.glogi :as log]
-            [camel-snake-kebab.core :as csk]
+  (:require [camel-snake-kebab.core :as csk]
             [cljs-bean.core :as bean]
-            [frontend.state :as state]
-            [frontend.components.plugins :as plugins]
-            [frontend.handler.plugin :as plugin-handler]
-            [frontend.commands :as commands]
-            [frontend.handler.notification :as notification]
-            [datascript.core :as d]
-            [medley.core :as medley]
-            [frontend.fs :as fs]
+            [cljs.reader]
             [clojure.string :as string]
             [clojure.walk :as walk]
-            [cljs.reader]
+            [datascript.core :as d]
+            [electron.ipc :as ipc]
+            [frontend.commands :as commands]
+            [frontend.components.plugins :as plugins]
+            [frontend.config :as config]
+            [frontend.db :as db]
+            [frontend.db.model :as db-model]
+            [frontend.db.query-dsl :as query-dsl]
+            [frontend.db.utils :as db-utils]
+            [frontend.fs :as fs]
+            [frontend.handler.dnd :as editor-dnd-handler]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.export :as export-handler]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.page :as page-handler]
+            [frontend.handler.plugin :as plugin-handler]
+            [frontend.modules.outliner.core :as outliner]
+            [frontend.modules.outliner.tree :as outliner-tree]
+            [frontend.state :as state]
+            [frontend.util :as util]
+            [frontend.util.cursor :as cursor]
+            [goog.dom :as gdom]
+            [lambdaisland.glogi :as log]
+            [medley.core :as medley]
+            [promesa.core :as p]
             [reitit.frontend.easy :as rfe]
-            [frontend.db.query-dsl :as query-dsl]))
+            [sci.core :as sci]))
 
 ;; helpers
 (defn- normalize-keyword-for-json
   [input]
   (when input
     (walk/postwalk
-     (fn [a]
-       (cond
-         (keyword? a) (csk/->camelCase (name a))
-         (uuid? a) (str a)
-         :else a)) input)))
+      (fn [a]
+        (cond
+          (keyword? a) (csk/->camelCase (name a))
+          (uuid? a) (str a)
+          :else a)) input)))
 
 (defn- parse-hiccup-ui
   [input]
@@ -54,14 +55,15 @@
 (def ^:export get_user_configs
   (fn []
     (bean/->js
-     (normalize-keyword-for-json
-      {:preferred-language   (:preferred-language @state/state)
-       :preferred-theme-mode (if (= (:ui/theme @state/state) "light") "white" "dark")
-       :preferred-format     (state/get-preferred-format)
-       :preferred-workflow   (state/get-preferred-workflow)
-       :preferred-todo       (state/get-preferred-todo)
-       :current-graph        (state/get-current-repo)
-       :me                   (state/get-me)}))))
+      (normalize-keyword-for-json
+        {:preferred-language    (:preferred-language @state/state)
+         :preferred-theme-mode  (if (= (:ui/theme @state/state) "light") "white" "dark")
+         :preferred-format      (state/get-preferred-format)
+         :preferred-workflow    (state/get-preferred-workflow)
+         :preferred-todo        (state/get-preferred-todo)
+         :preferred-date-format (state/get-date-formatter)
+         :current-graph         (state/get-current-repo)
+         :me                    (state/get-me)}))))
 
 (def ^:export get_current_graph
   (fn []
@@ -91,9 +93,9 @@
   (fn [path ^js data]
     (let [repo ""
           path (util/node-path.join path "package.json")]
-      (fs/write-file! repo "" path (js/JSON.stringify data nil 2) {:skip-mtime? true}))))
+      (fs/write-file! repo "" path (js/JSON.stringify data nil 2) {:skip-compare? true}))))
 
-(defn ^:private write_dotdir_file!
+(defn ^:private write_dotdir_file
   [file content sub-root]
   (p/let [repo ""
           path (plugin-handler/get-ls-dotdir-root)
@@ -102,11 +104,11 @@
           _ (when-not exist? (fs/mkdir-recur! path))
           user-path (util/node-path.join path file)
           sub-dir? (string/starts-with? user-path path)
-          _ (if-not sub-dir? (do (log/info :debug user-path) (throw "write file denied")))
+          _ (when-not sub-dir? (do (log/info :debug user-path) (throw "write file denied")))
           user-path-root (util/node-path.dirname user-path)
           exist? (fs/file-exists? user-path-root "")
           _ (when-not exist? (fs/mkdir-recur! user-path-root))
-          _ (fs/write-file! repo "" user-path content {:skip-mtime? true})]
+          _ (fs/write-file! repo "" user-path content {:skip-compare? true})]
     user-path))
 
 (defn ^:private read_dotdir_file
@@ -116,9 +118,9 @@
           path (util/node-path.join path sub-root)
           user-path (util/node-path.join path file)
           sub-dir? (string/starts-with? user-path path)
-          _ (if-not sub-dir? (do (log/info :debug user-path) (throw "read file denied")))
+          _ (when-not sub-dir? (log/info :debug user-path) (throw "read file denied"))
           exist? (fs/file-exists? "" user-path)
-          _ (when-not exist? (do (log/info :debug user-path) (throw "file not existed")))
+          _ (when-not exist? (log/info :debug user-path) (throw "file not existed"))
           content (fs/read-file "" user-path)]
     content))
 
@@ -129,41 +131,41 @@
           path (util/node-path.join path sub-root)
           user-path (util/node-path.join path file)
           sub-dir? (string/starts-with? user-path path)
-          _ (if-not sub-dir? (do (log/info :debug user-path) (throw "access file denied")))
+          _ (when-not sub-dir? (log/info :debug user-path) (throw "access file denied"))
           exist? (fs/file-exists? "" user-path)
-          _ (when-not exist? (do (log/info :debug user-path) (throw "file not existed")))
+          _ (when-not exist? (log/info :debug user-path) (throw "file not existed"))
           _ (fs/unlink! repo user-path {})]))
 
 (def ^:export write_user_tmp_file
   (fn [file content]
-    (write_dotdir_file! file content "tmp")))
+    (write_dotdir_file file content "tmp")))
 
 (def ^:export write_plugin_storage_file
   (fn [plugin-id file content]
-    (write_dotdir_file!
-     file content
-     (let [plugin-id (util/node-path.basename plugin-id)]
-       (util/node-path.join "storages" plugin-id)))))
+    (write_dotdir_file
+      file content
+      (let [plugin-id (util/node-path.basename plugin-id)]
+        (util/node-path.join "storages" plugin-id)))))
 
 (def ^:export read_plugin_storage_file
   (fn [plugin-id file]
     (let [plugin-id (util/node-path.basename plugin-id)]
       (read_dotdir_file
-       file (util/node-path.join "storages" plugin-id)))))
+        file (util/node-path.join "storages" plugin-id)))))
 
 (def ^:export unlink_plugin_storage_file
   (fn [plugin-id file]
     (let [plugin-id (util/node-path.basename plugin-id)]
       (unlink_dotdir_file!
-       file (util/node-path.join "storages" plugin-id)))))
+        file (util/node-path.join "storages" plugin-id)))))
 
 (def ^:export exist_plugin_storage_file
   (fn [plugin-id file]
     (p/let [root (plugin-handler/get-ls-dotdir-root)
             plugin-id (util/node-path.basename plugin-id)
             exist? (fs/file-exists?
-                    (util/node-path.join root "storages" plugin-id)
-                    file)]
+                     (util/node-path.join root "storages" plugin-id)
+                     file)]
       exist?)))
 
 (def ^:export clear_plugin_storage_files
@@ -188,7 +190,7 @@
       (p/let [repo ""
               path (plugin-handler/get-ls-dotdir-root)
               path (util/node-path.join path "preferences.json")]
-        (fs/write-file! repo "" path (js/JSON.stringify data nil 2) {:skip-mtime? true})))))
+        (fs/write-file! repo "" path (js/JSON.stringify data nil 2) {:skip-compare? true})))))
 
 (def ^:export load_plugin_user_settings
   (fn [key]
@@ -206,26 +208,33 @@
     (p/let [repo ""
             path (plugin-handler/get-ls-dotdir-root)
             path (util/node-path.join path "settings" (str key ".json"))]
-      (fs/write-file! repo "" path (js/JSON.stringify data nil 2) {:skip-mtime? true}))))
+      (fs/write-file! repo "" path (js/JSON.stringify data nil 2) {:skip-compare? true}))))
+
+(def ^:export unlink_plugin_user_settings
+  (fn [key]
+    (p/let [repo ""
+            path (plugin-handler/get-ls-dotdir-root)
+            path (util/node-path.join path "settings" (str key ".json"))]
+      (fs/unlink! repo path nil))))
 
 (def ^:export register_plugin_slash_command
   (fn [pid ^js cmd-actions]
     (when-let [[cmd actions] (bean/->clj cmd-actions)]
       (plugin-handler/register-plugin-slash-command
-       pid [cmd (mapv #(into [(keyword (first %))]
-                             (rest %)) actions)]))))
+        pid [cmd (mapv #(into [(keyword (first %))]
+                              (rest %)) actions)]))))
 
 (def ^:export register_plugin_simple_command
   (fn [pid ^js cmd-action]
     (when-let [[cmd action] (bean/->clj cmd-action)]
       (plugin-handler/register-plugin-simple-command
-       pid cmd (assoc action 0 (keyword (first action)))))))
+        pid cmd (assoc action 0 (keyword (first action)))))))
 
 (def ^:export register_plugin_ui_item
   (fn [pid type ^js opts]
     (when-let [opts (bean/->clj opts)]
       (plugin-handler/register-plugin-ui-item
-       pid (assoc opts :type type)))))
+        pid (assoc opts :type type)))))
 
 ;; app
 (def ^:export relaunch
@@ -244,16 +253,16 @@
 (def ^:export push_state
   (fn [^js k ^js params ^js query]
     (rfe/push-state
-     (keyword k)
-     (bean/->clj params)
-     (bean/->clj query))))
+      (keyword k)
+      (bean/->clj params)
+      (bean/->clj query))))
 
 (def ^:export replace_state
   (fn [^js k ^js params ^js query]
     (rfe/replace-state
-     (keyword k)
-     (bean/->clj params)
-     (bean/->clj query))))
+      (keyword k)
+      (bean/->clj params)
+      (bean/->clj query))))
 
 ;; editor
 (def ^:export check_editing
@@ -304,8 +313,38 @@
     (when-let [page (cond
                       (number? id-or-page-name) (db-utils/pull id-or-page-name)
                       (string? id-or-page-name) (db-model/get-page id-or-page-name))]
-      (if-not (contains? page :block/left)
+      (when-not (contains? page :block/left)
         (bean/->js (normalize-keyword-for-json (db-utils/pull (:db/id page))))))))
+
+(def ^:export get_all_pages
+  (fn [repo]
+    (let [pages (page-handler/get-all-pages repo)]
+      (bean/->js (normalize-keyword-for-json pages)))))
+
+(def ^:export create_page
+  (fn [name ^js properties ^js opts]
+    (some-> (if-let [page (db-model/get-page name)]
+              page
+              (let [properties (bean/->clj properties)
+                    {:keys [redirect createFirstBlock format]} (bean/->clj opts)
+                    name (page-handler/create!
+                           name
+                           {:redirect?           (if (boolean? redirect) redirect true)
+                            :create-first-block? (if (boolean? createFirstBlock) createFirstBlock true)
+                            :format              format
+                            :properties          properties})]
+                (db-model/get-page name)))
+            (:db/id)
+            (db-utils/pull)
+            (normalize-keyword-for-json)
+            (bean/->js))))
+
+(def ^:export delete_page
+  (fn [name]
+    (p/create (fn [ok] (page-handler/delete! name ok)))))
+
+(def ^:export rename_page
+  page-handler/rename!)
 
 (def ^:export edit_block
   (fn [block-uuid {:keys [pos] :or {pos :max} :as opts}]
@@ -319,12 +358,12 @@
           page-name (and isPageBlock block-uuid-or-page-name)
           block-uuid (if isPageBlock nil (medley/uuid block-uuid-or-page-name))
           new-block (editor-handler/api-insert-new-block!
-                     content
-                     {:block-uuid block-uuid
-                      :sibling?   sibling
-                      :before?    before
-                      :page       page-name
-                      :properties properties})]
+                      content
+                      {:block-uuid block-uuid
+                       :sibling?   sibling
+                       :before?    before
+                       :page       page-name
+                       :properties properties})]
       (bean/->js (normalize-keyword-for-json new-block)))))
 
 (def ^:export insert_batch_block
@@ -334,7 +373,7 @@
         (let [bb (if-not (vector? bb) (vector bb) bb)
               {:keys [sibling]} (bean/->clj opts)
               _ (editor-handler/paste-block-tree-after-target
-                 (:db/id block) sibling bb (:block/format block))]
+                  (:db/id block) sibling bb (:block/format block))]
           nil)))))
 
 (def ^:export remove_block
@@ -342,7 +381,7 @@
     (let [includeChildren true
           repo (state/get-current-repo)]
       (editor-handler/delete-block-aux!
-       {:block/uuid (medley/uuid block-uuid) :repo repo} includeChildren))))
+        {:block/uuid (medley/uuid block-uuid) :repo repo} includeChildren))))
 
 (def ^:export update_block
   (fn [block-uuid content ^js opts]
@@ -376,17 +415,20 @@
     (when-let [block (cond
                        (number? id-or-uuid) (db-utils/pull id-or-uuid)
                        (string? id-or-uuid) (db-model/query-block-by-uuid id-or-uuid))]
-      (if-not (contains? block :block/name)
+      (when-not (contains? block :block/name)
         (when-let [uuid (:block/uuid block)]
           (let [{:keys [includeChildren]} (bean/->clj opts)
-                block (if (not includeChildren) block (first (outliner-tree/blocks->vec-tree [block] uuid)))]
+                repo (state/get-current-repo)
+                block (if (not includeChildren)
+                        block (first (outliner-tree/blocks->vec-tree
+                                       (db-model/get-block-and-children repo uuid) uuid)))]
             (bean/->js (normalize-keyword-for-json block))))))))
 
 (def ^:export get_previous_sibling_block
   (fn [uuid]
     (when-let [block (db-model/query-block-by-uuid uuid)]
       (let [{:block/keys [parent left]} block
-            block (if-not (= parent left) (db-utils/pull (:db/id left)))]
+            block (when-not (= parent left) (db-utils/pull (:db/id left)))]
         (and block (bean/->js (normalize-keyword-for-json block)))))))
 
 (def ^:export get_next_sibling_block
@@ -430,13 +472,21 @@
             blocks (normalize-keyword-for-json blocks)]
         (bean/->js blocks)))))
 
+;; plugins
+(def ^:export __install_plugin
+  (fn [^js manifest]
+    (when-let [{:keys [repo id] :as mft} (bean/->clj manifest)]
+      (if-not (and repo id)
+        (throw (js/Error. "[required] :repo :id"))
+        (plugin-handler/install-marketplace-plugin mft)))))
+
 ;; db
 (defn ^:export q
   [query-string]
   (when-let [repo (state/get-current-repo)]
     (when-let [conn (db/get-conn repo)]
       (when-let [result (query-dsl/query repo query-string)]
-        (clj->js @result)))))
+        (bean/->js (normalize-keyword-for-json (flatten @result)))))))
 
 (defn ^:export datascript_query
   [query & inputs]
@@ -458,6 +508,11 @@
           (.setAttribute anchor "href" data-str)
           (.setAttribute anchor "download" (str (string/replace repo "/" " ") ".transit"))
           (.click anchor))))))
+
+(defn ^:export download_graph_pages
+  []
+  (when-let [repo (state/get-current-repo)]
+    (export-handler/export-repo-as-zip! repo)))
 
 ;; helpers
 (defn ^:export show_msg

@@ -1,10 +1,9 @@
 (ns frontend.util.pool
-  (:require ["threads" :refer [spawn Pool Worker]]
-            [promesa.core :as p]
+  (:require [electron.ipc :as ipc]
+            [frontend.config :as config]
             [frontend.util :as util]
-            ["path" :as path]
-            [electron.ipc :as ipc]
-            [frontend.config :as config]))
+            [promesa.core :as p]
+            ["threads" :refer [Pool Worker spawn]]))
 
 (defonce parser-pool (atom nil))
 
@@ -12,12 +11,17 @@
   ([]
    (create-parser-pool! 8))
   ([num]
-   (p/let [static-path (if (and (util/electron?) (not config/dev?))
+   (p/let [static-path (if (and (util/electron?)
+                                (= "file:" (.-protocol js/location)))
                          (ipc/ipc :getDirname)
-                         "/static")]
+                         "/static")
+           path (str static-path "/js/parser-worker.js")
+           path (if (util/electron?)
+                  path
+                  (config/asset-uri path))]
      (Pool.
       (fn []
-        (spawn (Worker. (str static-path "/js/parser-worker.js")) num))))))
+        (spawn (Worker. path) num))))))
 
 ;; (defn finish-pool!
 ;;   [{:keys [pool tasks]} ok-handler]

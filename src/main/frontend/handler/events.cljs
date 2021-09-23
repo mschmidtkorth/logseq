@@ -1,25 +1,32 @@
 (ns frontend.handler.events
   (:refer-clojure :exclude [run!])
-  (:require [frontend.state :as state]
-            [clojure.core.async :as async]
-            [frontend.spec :as spec]
-            [frontend.ui :as ui]
-            [frontend.util :as util :refer [profile]]
-            [frontend.config :as config]
-            [frontend.handler.notification :as notification]
-            [frontend.handler.common :as common-handler]
-            [frontend.handler.editor :as editor-handler]
-            [frontend.handler.page :as page-handler]
+  (:require [clojure.core.async :as async]
+            [clojure.set :as set]
+            [datascript.core :as d]
+            [frontend.components.diff :as diff]
+            [frontend.components.plugins :as plugin]
             [frontend.components.encryption :as encryption]
-            [frontend.fs.nfs :as nfs]
+            [frontend.components.git :as git-component]
+            [frontend.components.shell :as shell]
+            [frontend.components.search :as search]
+            [frontend.config :as config]
+            [frontend.db :as db]
+            [frontend.db-schema :as db-schema]
             [frontend.db.conn :as conn]
             [frontend.extensions.srs :as srs]
-            [frontend.db-schema :as db-schema]
-            [frontend.db :as db]
-            [datascript.core :as d]
+            [frontend.fs.nfs :as nfs]
+            [frontend.handler.common :as common-handler]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.page :as page-handler]
+            [frontend.spec :as spec]
+            [frontend.state :as state]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [rum.core :as rum]
             ["semver" :as semver]
-            [clojure.set :as set]
-            [rum.core :as rum]))
+            [clojure.string :as string]
+            [frontend.modules.instrumentation.posthog :as posthog]))
 
 ;; TODO: should we move all events here?
 
@@ -134,11 +141,33 @@
 (defmethod handle :modal/show-cards [_]
   (state/set-modal! srs/global-cards))
 
+(defmethod handle :modal/show-themes-modal [_]
+  (plugin/open-select-theme!))
+
+(rum/defc modal-output
+  [content]
+  content)
+
+(defmethod handle :modal/show [[_ content]]
+  (state/set-modal! #(modal-output content)))
+
+(defmethod handle :modal/set-git-username-and-email [[_ content]]
+  (state/set-modal! git-component/set-git-username-and-email))
+
 (defmethod handle :page/title-property-changed [[_ old-title new-title]]
   (page-handler/rename! old-title new-title))
 
 (defmethod handle :page/create-today-journal [[_ repo]]
   (page-handler/create-today-journal!))
+
+(defmethod handle :file/not-matched-from-disk [[_ path disk-content db-content]]
+  (state/clear-edit!)
+  (when-let [repo (state/get-current-repo)]
+    (when (not= (string/trim disk-content) (string/trim db-content))
+      (state/set-modal! #(diff/local-file repo path disk-content db-content)))))
+
+(defmethod handle :modal/display-file-version [[_ path content hash]]
+  (state/set-modal! #(git-component/file-specific-version path hash content)))
 
 (defmethod handle :after-db-restore [[_ repos]]
   (mapv (fn [{url :url} repo]
@@ -154,6 +183,18 @@
                :warning
                false))))
         repos))
+
+(defmethod handle :command/run [_]
+  (when (util/electron?)
+    (state/set-modal! shell/shell)))
+
+(defmethod handle :go/search [_]
+  (state/set-modal! search/search-modal
+                    {:fullscreen? false
+                     :close-btn?  false}))
+
+(defmethod handle :instrument [[_ {:keys [type payload]}]]
+  (posthog/capture type payload))
 
 (defn run!
   []

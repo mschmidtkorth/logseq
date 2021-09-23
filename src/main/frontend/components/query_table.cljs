@@ -1,15 +1,16 @@
 (ns frontend.components.query-table
-  (:require [frontend.ui :as ui]
-            [frontend.util :as util]
-            [rum.core :as rum]
-            [frontend.util.property :as property]
-            [frontend.db :as db]
-            [frontend.date :as date]
-            [frontend.state :as state]
-            [clojure.string :as string]
+  (:require [clojure.string :as string]
             [frontend.components.svg :as svg]
+            [frontend.date :as date]
+            [frontend.db :as db]
             [frontend.handler.common :as common-handler]
-            [frontend.handler.editor :as editor-handler]))
+            [frontend.handler.editor :as editor-handler]
+            [frontend.state :as state]
+            [frontend.util :as util]
+            [frontend.util.clock :as clock]
+            [frontend.util.property :as property]
+            [medley.core :as medley]
+            [rum.core :as rum]))
 
 ;; TODO: extract to table utils
 (defn- sort-result-by
@@ -39,8 +40,18 @@
                   (remove (property/built-in-properties))
                   (remove #{:template}))
         keys (if page? (cons :page keys) (cons :block keys))
-        keys (if page? (concat keys [:created-at :updated-at]) keys)]
+        keys (if page? (distinct (concat keys [:created-at :updated-at])) keys)]
     keys))
+
+(defn attach-clock-property
+  [result]
+  (let [ks [:block/properties :clock-time]
+        result (map (fn [b]
+                      (assoc-in b ks (or (clock/clock-summary (:block/body b) false) 0)))
+                 result)]
+    (if (every? #(zero? (get-in % ks)) result)
+      (map #(medley/dissoc-in % ks) result)
+      result)))
 
 (rum/defcs result-table < rum/reactive
   (rum/local nil ::sort-by-item)
@@ -64,16 +75,22 @@
           editor-box (get config :editor-box)
           ;; remove templates
           result (remove (fn [b] (some? (get-in b [:block/properties :template]))) result)
+          result (if page? result (attach-clock-property result))
+          clock-time-total (when-not page?
+                             (->> (map #(get-in % [:block/properties :clock-time] 0) result)
+                                  (apply +)))
           query-properties (some-> (get-in current-block [:block/properties :query-properties] "")
                                    (common-handler/safe-read-string "Parsing query properties failed"))
           keys (if (seq query-properties)
                  query-properties
                  (get-keys result page?))
-          keys (if (some #{:created-at :updated-at} keys)
-                 (concat
-                  (remove #{:created-at :updated-at} keys)
-                  (filter #{:created-at :updated-at} keys))
-                 keys)
+          included-keys #{:created-at :updated-at}
+          keys (distinct
+                (if (some included-keys keys)
+                  (concat (remove included-keys keys)
+                          (filter included-keys keys)
+                          included-keys)
+                  keys))
           sort-by-fn (fn [item]
                        (let [key sort-by-item]
                          (case key
@@ -91,7 +108,11 @@
                              :style {:width "100%"}}
        [:table.table-auto
         (for [key keys]
-          (sortable-title (name key) key *sort-by-item *desc? (:block/uuid current-block)))
+          (let [key-name (if (and (= key :clock-time) (integer? clock-time-total))
+                           (util/format "clock-time(total: %s)" (clock/minutes->days:hours:minutes
+                                                                  clock-time-total))
+                           (name key))]
+            (sortable-title key-name key *sort-by-item *desc? (:block/uuid current-block))))
         (for [item result]
           (let [format (:block/format item)
                 edit-input-id (str "edit-block-" (:id config) "-" (:block/uuid item))

@@ -2,19 +2,19 @@
   (:require [clojure.string :as string]
             [dommy.core :as d]
             [frontend.commands :as commands
-             :refer [*angle-bracket-caret-pos *matched-block-commands *matched-commands *show-block-commands *show-commands *slash-caret-pos *first-command-group]]
+             :refer [*angle-bracket-caret-pos *first-command-group *matched-block-commands *matched-commands *show-block-commands *show-commands *slash-caret-pos]]
+            [frontend.components.block :as block]
             [frontend.components.datetime :as datetime-comp]
             [frontend.components.search :as search]
             [frontend.components.svg :as svg]
-            [frontend.components.block :as block]
             [frontend.config :as config]
             [frontend.db :as db]
+            [frontend.extensions.zotero :as zotero]
             [frontend.handler.editor :as editor-handler :refer [get-state]]
             [frontend.handler.editor.lifecycle :as lifecycle]
             [frontend.handler.page :as page-handler]
             [frontend.mixins :as mixins]
             [frontend.modules.shortcut.core :as shortcut]
-            [frontend.extensions.zotero :as zotero]
             [frontend.state :as state]
             [frontend.ui :as ui]
             [frontend.util :as util]
@@ -25,49 +25,56 @@
 
 (rum/defc commands < rum/reactive
   [id format]
-  (let [show-commands? (util/react *show-commands)]
-    (when (and show-commands?
-               @*slash-caret-pos
-               (not (state/sub :editor/show-page-search?))
-               (not (state/sub :editor/show-block-search?))
-               (not (state/sub :editor/show-template-search?))
-               (not (state/sub :editor/show-input))
-               (not (state/sub :editor/show-zotero))
-               (not (state/sub :editor/show-date-picker?)))
-      (let [matched (util/react *matched-commands)]
-        (ui/auto-complete
-         matched
-         {:get-group-name
-          (fn [item]
-            (get *first-command-group (first item)))
+  (let [matched (util/react *matched-commands)]
+    (when (util/react *show-commands)
+      (ui/auto-complete
+       matched
+       {:get-group-name
+        (fn [item]
+          (get *first-command-group (first item)))
 
-          :item-render
-          (fn [item]
-            (let [command-name (first item)
-                  command-doc (get item 2)]
-              [:div {:title (when (state/show-command-doc?) command-doc)} command-name]))
+        :item-render
+        (fn [item]
+          (let [command-name (first item)
+                command-doc (get item 2)
+                doc (when (state/show-command-doc?) command-doc)]
+            (cond
+              (string? doc)
+              [:div {:title doc}
+               command-name]
 
-          :on-chosen
-          (fn [chosen-item]
-            (let [command (first chosen-item)]
-              (reset! commands/*current-command command)
-              (let [command-steps (get (into {} matched) command)
-                    restore-slash? (or
-                                    (contains? #{"Today" "Yesterday" "Tomorrow"} command)
-                                    (and
-                                     (not (fn? command-steps))
-                                     (not (contains? (set (map first command-steps)) :editor/input))
-                                     (not (contains? #{"Date Picker" "Template" "Deadline" "Scheduled" "Upload an image"} command))))]
-                (editor-handler/insert-command! id command-steps
-                                                format
-                                                {:restore? restore-slash?}))))
-          :class
-          "black"})))))
+              (vector? doc)
+              (ui/tippy {:html doc
+                         :interactive true
+                         :open? true
+                         :fixed-position? true
+                         :position "right"
+                         :distance 10}
+                        [:div command-name])
+
+              :else
+              [:div command-name])))
+
+        :on-chosen
+        (fn [chosen-item]
+          (let [command (first chosen-item)]
+            (reset! commands/*current-command command)
+            (let [command-steps (get (into {} matched) command)
+                  restore-slash? (or
+                                  (contains? #{"Today" "Yesterday" "Tomorrow"} command)
+                                  (and
+                                   (not (fn? command-steps))
+                                   (not (contains? (set (map first command-steps)) :editor/input))
+                                   (not (contains? #{"Date picker" "Template" "Deadline" "Scheduled" "Upload an image"} command))))]
+              (editor-handler/insert-command! id command-steps
+                                              format
+                                              {:restore? restore-slash?}))))
+        :class
+        "black"}))))
 
 (rum/defc block-commands < rum/reactive
   [id format]
-  (when (and (util/react *show-block-commands)
-             @*angle-bracket-caret-pos)
+  (when (util/react *show-block-commands)
     (let [matched (util/react *matched-block-commands)]
       (ui/auto-complete
        (map first matched)
@@ -104,7 +111,7 @@
            {:on-chosen   (page-handler/on-chosen-handler input id q pos format)
             :on-enter    #(page-handler/page-not-exists-handler input id q current-pos)
             :item-render (fn [page-name chosen?]
-                           [:div.py-2.preview-trigger-wrapper
+                           [:div.preview-trigger-wrapper
                             (block/page-preview-trigger
                              {:children        [:div (search/highlight-exact-query page-name q)]
                               :open?           chosen?
@@ -113,7 +120,7 @@
                               :tippy-distance  24
                               :tippy-position  (if sidebar? "left" "right")}
                              page-name)])
-            :empty-div   [:div.text-gray-500.pl-4.pr-4 "Search for a page"]
+            :empty-div   [:div.text-gray-500.text-sm.px-4.py-2 "Search for a page"]
             :class       "black"}))))))
 
 (rum/defcs block-search-auto-complete < rum/reactive
@@ -185,7 +192,7 @@
            matched-templates
            {:on-chosen   (editor-handler/template-on-chosen-handler id)
             :on-enter    non-exist-handler
-            :empty-div   [:div.text-gray-500.pl-4.pr-4 "Search for a template"]
+            :empty-div   [:div.text-gray-500.px-4.py-2.text-sm "Search for a template"]
             :item-render (fn [[template _block-db-id]]
                            template)
             :class       "black"}))))))
@@ -242,32 +249,21 @@
             (let [input-value (get state ::input-value)
                   input-option (get @state/state :editor/show-input)]
               (when (seq @input-value)
-                ;; no new line input
+                  ;; no new line input
                 (util/stop e)
                 (let [[_id on-submit] (:rum/args state)
                       {:keys [pos]} @*slash-caret-pos
                       command (:command (first input-option))]
                   (on-submit command @input-value pos))
                 (reset! input-value nil))))})))
-  {:did-update
-   (fn [state]
-     (when-let [show-input (state/get-editor-show-input)]
-       (let [id (str "modal-input-"
-                     (name (:id (first show-input))))
-             first-input (gdom/getElement id)]
-         (when (and first-input
-                    (not (d/has-class? first-input "focused")))
-           (.focus first-input)
-           (d/add-class! first-input "focused"))))
-     state)}
   [state id on-submit]
   (when-let [input-option (state/sub :editor/show-input)]
     (let [{:keys [pos]} (util/react *slash-caret-pos)
           input-value (get state ::input-value)]
       (when (seq input-option)
         (let [command (:command (first input-option))]
-          [:div.p-2.mt-2.rounded-md.shadow-sm.bg-base-2
-           (for [{:keys [id placeholder type] :as input-item} input-option]
+          [:div.p-2.rounded-md.shadow-lg
+           (for [{:keys [id placeholder type autoFocus] :as input-item} input-option]
              [:div.my-3
               [:input.form-input.block.w-full.pl-2.sm:text-sm.sm:leading-5
                (merge
@@ -279,7 +275,9 @@
                                    (swap! input-value assoc id (util/evalue e)))
                   :auto-complete (if (util/chrome?) "chrome-off" "off")}
                   placeholder
-                  (assoc :placeholder placeholder))
+                  (assoc :placeholder placeholder)
+                  autoFocus
+                  (assoc :auto-focus true))
                 (dissoc input-item :id))]])
            (ui/button
             "Submit"
@@ -301,20 +299,35 @@
                             (- (max (* 2 offset-top) delta-height) 16)
                             max-height))
                         max-height)
-        x-overflow? (if (and (seq rect) (> vw-width max-width))
-                      (let [delta-width (- vw-width (+ (:left rect) left))]
-                        (< delta-width (* max-width 0.5))))] ;; FIXME: for translateY layer
+        right-sidebar? (:ui/sidebar-open? @state/state)
+        editing-key    (first (keys (:editor/editing? @state/state)))
+        *el (rum/use-ref nil)
+        _ (rum/use-effect! (fn []
+                             (when-let [^js/HTMLElement cnt
+                                        (and right-sidebar? editing-key
+                                             (js/document.querySelector "#main-container"))]
+                               (when (.contains cnt (js/document.querySelector (str "#" editing-key)))
+                                 (let [el  (rum/deref *el)
+                                       ofx (- (.-scrollWidth cnt) (.-clientWidth cnt))]
+                                   (when (> ofx 0)
+                                     (set! (.-transform (.-style el)) (str "translateX(-" (+ ofx 20) "px)")))))))
+                           [right-sidebar? editing-key])
+        ;; FIXME: for translateY layer
+        x-overflow-vw? (when (and (seq rect) (> vw-width max-width))
+                         (let [delta-width (- vw-width (+ (:left rect) left))]
+                           (< delta-width (* max-width 0.5))))]
     [:div.absolute.rounded-md.shadow-lg.absolute-modal
-     {:class (if x-overflow? "is-overflow-vw-x" "")
+     {:ref *el
+      :class (if x-overflow-vw? "is-overflow-vw-x" "")
       :on-mouse-down (fn [e] (.stopPropagation e))
       :style (merge
               {:top        (+ top offset-top)
                :max-height to-max-height
                :max-width 700
-               ;; TODO: auto responsive fixed size
+                ;; TODO: auto responsive fixed size
                :width "fit-content"
                :z-index    11}
-              (if set-default-width?
+              (when set-default-width?
                 {:width max-width})
               (if config/mobile?
                 {:left 0}
@@ -417,6 +430,63 @@
        [:span {:id (str "mock-text_" idx)
                :key idx} c]))])
 
+(defn animated-modal
+  [key component set-default-width? *pos]
+  (when *pos
+    (ui/css-transition
+     {:key key
+      :class-names {:enter "origin-top-left opacity-0 transform scale-95"
+                    :enter-done "origin-top-left transition opacity-100 transform scale-100"
+                    :exit "origin-top-left transition opacity-0 transform scale-95"}
+      :timeout {:enter 0
+                :exit 150}}
+     (fn [_]
+       (absolute-modal
+        component
+        set-default-width?
+        *pos)))))
+
+
+(rum/defc modals < rum/reactive
+  "React to atom changes, find and render the correct modal"
+  [id format]
+  (ui/transition-group
+   (cond
+     (and (util/react *show-commands)
+          (not (state/sub :editor/show-page-search?))
+          (not (state/sub :editor/show-block-search?))
+          (not (state/sub :editor/show-template-search?))
+          (not (state/sub :editor/show-input))
+          (not (state/sub :editor/show-zotero))
+          (not (state/sub :editor/show-date-picker?)))
+     (animated-modal "commands" (commands id format) true (util/react *slash-caret-pos))
+
+     (and (util/react *show-block-commands) @*angle-bracket-caret-pos)
+     (animated-modal "block-commands" (block-commands id format) true (util/react *angle-bracket-caret-pos))
+
+     (state/sub :editor/show-page-search?)
+     (animated-modal "page-search" (page-search id format) true (util/react *slash-caret-pos))
+
+     (state/sub :editor/show-block-search?)
+     (animated-modal "block-search" (block-search id format) false (util/react *slash-caret-pos))
+
+     (state/sub :editor/show-template-search?)
+     (animated-modal "template-search" (template-search id format) true (util/react *slash-caret-pos))
+
+     (state/sub :editor/show-date-picker?)
+     (animated-modal "date-picker" (datetime-comp/date-picker id format nil) false (util/react *slash-caret-pos))
+
+     (state/sub :editor/show-input)
+     (animated-modal "input" (input id
+                                    (fn [command m pos]
+                                      (editor-handler/handle-command-input command id format m pos)))
+                     true (util/react *slash-caret-pos))
+
+     (state/sub :editor/show-zotero)
+     (animated-modal "zotero-search" (zotero/zotero-search id) false (util/react *slash-caret-pos))
+
+     :else
+     nil)))
 
 (rum/defcs box < rum/reactive
   {:init (fn [state]
@@ -453,50 +523,7 @@
        :class             (get-editor-heading-class content)})
 
      (mock-textarea)
-
-     ;; TODO: how to render the transitions asynchronously?
-     (transition-cp
-      (commands id format)
-      true
-      *slash-caret-pos)
-
-     (transition-cp
-      (block-commands id format)
-      true
-      *angle-bracket-caret-pos)
-
-     (transition-cp
-      (page-search id format)
-      true
-      *slash-caret-pos)
-
-     (transition-cp
-      (block-search id format)
-      false
-      *slash-caret-pos)
-
-     (transition-cp
-      (template-search id format)
-      true
-      *slash-caret-pos)
-
-     (transition-cp
-      (datetime-comp/date-picker id format nil)
-      false
-      *slash-caret-pos)
-
-     (transition-cp
-      (input id
-             (fn [command m pos]
-               (editor-handler/handle-command-input command id format m pos)))
-      true
-      *slash-caret-pos)
-
-     (when (state/sub :editor/show-zotero)
-       (transition-cp
-        (zotero/zotero-search id)
-        false
-        *slash-caret-pos))
+     (modals id format)
 
      (when format
        (image-uploader id format))]))

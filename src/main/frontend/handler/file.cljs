@@ -10,6 +10,7 @@
             [clojure.string :as string]
             [frontend.config :as config]
             [frontend.db :as db]
+            [frontend.db.model :as model]
             [frontend.format :as format]
             [frontend.fs :as fs]
             [frontend.fs.nfs :as nfs]
@@ -22,7 +23,8 @@
             [frontend.utf8 :as utf8]
             [frontend.util :as util]
             [lambdaisland.glogi :as log]
-            [promesa.core :as p]))
+            [promesa.core :as p]
+            [frontend.debug :as debug]))
 
 ;; TODO: extract all git ops using a channel
 
@@ -110,11 +112,13 @@
                        (set))
         keep-block-ref-f (fn [refs]
                            (filter (fn [ref]
-                                     (when (and (vector? ref)
-                                              (= :block/uuid (first ref)))
+                                     (cond
+                                       (and (vector? ref) (= :block/uuid (first ref)))
                                        (let [id (second ref)]
                                          (or (contains? block-ids id)
-                                             (db/entity [:block/uuid id]))))) refs))]
+                                             (db/entity [:block/uuid id])))
+                                       (and (map? ref) (contains? ref :block/journal?))
+                                       (db/entity [:block/name (ref :block/name)]))) refs))]
     (map (fn [item]
            (update item :block/refs keep-block-ref-f))
       data)))
@@ -158,38 +162,41 @@
 
 ;; TODO: Remove this function in favor of `alter-files`
 (defn alter-file
-  [repo path content {:keys [reset? re-render-root? add-history? update-status? from-disk?]
+  [repo path content {:keys [reset? re-render-root? add-history? update-status? from-disk? skip-compare?]
                       :or {reset? true
                            re-render-root? false
                            add-history? true
                            update-status? false
-                           from-disk? false}}]
+                           from-disk? false
+                           skip-compare? false}}]
   (let [edit-block (state/get-edit-block)
         original-content (db/get-file-no-sub repo path)
         write-file! (if from-disk?
                       #(p/resolved nil)
-                      #(fs/write-file! repo (config/get-repo-dir repo) path content (when original-content {:old-content original-content})))]
-    (if reset?
-      (do
-        (when-let [page-id (db/get-file-page-id path)]
-          (db/transact! repo
-            [[:db/retract page-id :block/alias]
-             [:db/retract page-id :block/tags]]))
-        (reset-file! repo path content))
-      (db/set-file-content! repo path content))
-    (util/p-handle (write-file!)
-                   (fn [_]
-                     (when (= path (config/get-config-path repo))
-                       (restore-config! repo true))
-                     (when (= path (config/get-custom-css-path repo))
-                       (ui-handler/add-style-if-exists!))
-                     (when re-render-root? (ui-handler/re-render-root!))
-                     ;; (when (and add-history? original-content)
-                     ;;   (history/add-history! repo [[path original-content content]]))
-                     )
-                   (fn [error]
-                     (println "Write file failed, path: " path ", content: " content)
-                     (log/error :write/failed error)))))
+                      #(fs/write-file! repo (config/get-repo-dir repo) path content
+                                       (assoc (when original-content {:old-content original-content})
+                                              :skip-compare? skip-compare?)))]
+    (p/let [_ (if reset?
+                (do
+                  (when-let [page-id (db/get-file-page-id path)]
+                    (db/transact! repo
+                      [[:db/retract page-id :block/alias]
+                       [:db/retract page-id :block/tags]]))
+                  (reset-file! repo path content))
+                (db/set-file-content! repo path content))]
+      (util/p-handle (write-file!)
+                     (fn [_]
+                       (when (= path (config/get-config-path repo))
+                         (restore-config! repo true))
+                       (when (= path (config/get-custom-css-path repo))
+                         (ui-handler/add-style-if-exists!))
+                       (when re-render-root? (ui-handler/re-render-root!))
+                       ;; (when (and add-history? original-content)
+                       ;;   (history/add-history! repo [[path original-content content]]))
+                       )
+                     (fn [error]
+                       (println "Write file failed, path: " path ", content: " content)
+                       (log/error :write/failed error))))))
 
 (defn set-file-content!
   [repo path new-content]
@@ -233,29 +240,26 @@
           (chan-callback))))))
 
 (defn alter-files-handler!
-  [repo files {:keys [add-history? update-status? finish-handler reset? chan]
-               :or {add-history? true
-                    update-status? true
-                    reset? false}} file->content]
+  [repo files {:keys [finish-handler chan]} file->content]
   (let [write-file-f (fn [[path content]]
                        (let [original-content (get file->content path)]
-                         (-> (p/let [_ (nfs/check-directory-permission! repo)]
+                         (-> (p/let [_ (or
+                                        (util/electron?)
+                                        (nfs/check-directory-permission! repo))]
+                               (debug/set-ack-step! path :write-file)
                                (fs/write-file! repo (config/get-repo-dir repo) path content
                                                {:old-content original-content}))
                              (p/catch (fn [error]
+                                        (state/pub-event! [:instrument {:type :write-file/failed
+                                                                        :payload {:path path
+                                                                                  :error (str error)}}])
                                         (log/error :write-file/failed {:path path
                                                                        :content content
                                                                        :error error}))))))
         finish-handler (fn []
                          (when finish-handler
                            (finish-handler))
-                         (ui-handler/re-render-file!)
-                         ;; (when add-history?
-                         ;;   (let [files-tx (mapv (fn [[path content]]
-                         ;;                          (let [original-content (get file->content path)]
-                         ;;                            [path original-content content])) files)]
-                         ;;     (history/add-history! repo files-tx)))
-                         )]
+                         (ui-handler/re-render-file!))]
     (-> (p/all (map write-file-f files))
         (p/then (fn []
                   (finish-handler)
@@ -285,14 +289,24 @@
      (p/catch (fn [err]
                 (js/console.error "error: " err))))))
 
-;; TODO: batch writes, how to deal with file history?
 (defn run-writes-chan!
   []
   (let [chan (state/get-file-write-chan)]
     (async/go-loop []
-      (let [args (async/<! chan)]
+      (let [args (async/<! chan)
+            files (second args)]
+
+        (doseq [path (map first files)]
+          (debug/set-ack-step! path :start-write-file))
+
         ;; return a channel
-        (<p! (apply alter-files-handler! args)))
+        (try
+          (<p! (apply alter-files-handler! args))
+          (catch js/Error e
+            (log/error :file/write-failed e)
+            (state/pub-event! [:instrument {:type :debug/write-failed
+                                            :payload {:step :start-to-write
+                                                      :error e}}]))))
       (recur))
     chan))
 
@@ -342,3 +356,14 @@
             new-result (rewrite/assoc-in result ks v)]
         (let [new-content (str new-result)]
           (set-file-content! repo path new-content))))))
+
+;; TODO:
+;; (defn compare-latest-pages
+;;   []
+;;   (when-let [repo (state/get-current-repo)]
+;;     (doseq [{:block/keys [file name]} (db/get-latest-changed-pages repo)]
+;;       (when-let [path (:file/path (db/pull (:db/id file)))]
+;;         (p/let [content (load-file repo path)]
+;;           (when (not= (string/trim content) (string/trim (or (db/get-file repo path) "")))
+;;             ;; notify
+;;             ))))))

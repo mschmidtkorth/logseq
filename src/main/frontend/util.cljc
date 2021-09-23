@@ -370,6 +370,11 @@
    (defn stop [e]
      (when e (doto e (.preventDefault) (.stopPropagation)))))
 
+#?(:cljs
+   (defn stop-propagation [e]
+     (when e (.stopPropagation e))))
+
+
 (def speed 500)
 (def moving-frequency 15)
 
@@ -788,7 +793,7 @@
   (safe-re-find (re-pattern uuid-pattern) s))
 
 (defn drop-nth [n coll]
-  (keep-indexed #(if (not= %1 n) %2) coll))
+  (keep-indexed #(when (not= %1 n) %2) coll))
 
 (defn capitalize-all [s]
   (some->> (string/split s #" ")
@@ -954,7 +959,7 @@
        [(.getData c "text/html") (.getData c "text")]
        (if-let [c (gobj/getValueByKeys event "originalEvent" "clipboardData")]
          [(.getData c "text/html") (.getData c "text")]
-         (if-let [c (gobj/get js/window "clipboardData")]
+         (when-let [c (gobj/get js/window "clipboardData")]
            [(.getData c "Text") (.getData c "Text")])))))
 
 (defn pp-str [x]
@@ -1213,21 +1218,14 @@
 
 (defn keyname [key] (str (namespace key) "/" (name key)))
 
-(defn batch [in max-time idle? handler]
+(defn batch [in max-time handler]
   (async/go-loop [buf [] t (async/timeout max-time)]
     (let [[v p] (async/alts! [in t])]
       (cond
-        (= p t)
+        (or (= p t) (nil? v))
         (let [timeout (async/timeout max-time)]
-          (if (idle?)
-           (do
-             (handler buf)
-             (recur [] timeout))
-           (recur buf timeout)))
-
-        (nil? v)                        ; stop
-        (when (seq buf)
-          (handler buf))
+          (handler buf)
+          (recur [] timeout))
 
         :else
         (recur (conj buf v) t)))))
@@ -1374,7 +1372,7 @@
      (let [path (string/lower-case path)]
        (not
         (some #(string/ends-with? path %)
-              [".md" ".markdown" ".org" ".edn" ".css"]))))))
+              [".md" ".markdown" ".org" ".edn" ".css" ".png" ".jpg" ".jpeg"]))))))
 
 (defn wrapped-by-quotes?
   [v]
@@ -1389,3 +1387,11 @@
   (if (wrapped-by-quotes? v)
     (unquote-string v)
     v))
+
+#?(:cljs
+   (defn right-click?
+     [e]
+     (let [which (gobj/get e "which")
+           button (gobj/get e "button")]
+       (or (= which 3)
+           (= button 2)))))

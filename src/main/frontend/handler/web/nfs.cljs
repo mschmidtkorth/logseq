@@ -1,27 +1,25 @@
 (ns frontend.handler.web.nfs
   "The File System Access API, https://web.dev/file-system-access/."
-  (:require [cljs-bean.core :as bean]
-            [promesa.core :as p]
-            [medley.core :as medley]
-            [goog.object :as gobj]
-            [frontend.util :as util]
+  (:require ["/frontend/utils" :as utils]
+            [cljs-bean.core :as bean]
+            [clojure.set :as set]
+            [clojure.string :as string]
+            [frontend.config :as config]
+            [frontend.db :as db]
+            [frontend.encrypt :as encrypt]
+            [frontend.fs :as fs]
+            [frontend.fs.nfs :as nfs]
             [frontend.handler.common :as common-handler]
-            ["/frontend/utils" :as utils]
             [frontend.handler.repo :as repo-handler]
             [frontend.handler.route :as route-handler]
             [frontend.idb :as idb]
-            [frontend.state :as state]
-            [clojure.string :as string]
-            [clojure.set :as set]
-            [frontend.fs :as fs]
-            [frontend.fs.nfs :as nfs]
-            [frontend.db :as db]
-            [frontend.db.model :as db-model]
-            [frontend.config :as config]
-            [lambdaisland.glogi :as log]
-            [frontend.encrypt :as encrypt]
             [frontend.search :as search]
-            [frontend.storage :as storage]))
+            [frontend.state :as state]
+            [frontend.storage :as storage]
+            [frontend.util :as util]
+            [goog.object :as gobj]
+            [lambdaisland.glogi :as log]
+            [promesa.core :as p]))
 
 (defn remove-ignore-files
   [files]
@@ -85,7 +83,7 @@
 
 (defn- set-files-aux!
   [handles]
-  (if (seq handles)
+  (when (seq handles)
     (let [[h t] (split-at 50 handles)]
       (p/let [_ (p/promise (fn [_]
                              (js/setTimeout (fn []
@@ -176,7 +174,7 @@
 
 (defn- compute-diffs
   [old-files new-files]
-  (let [ks [:file/path :file/last-modified-at]
+  (let [ks [:file/path :file/last-modified-at :file/content]
         ->set (fn [files ks]
                 (when (seq files)
                   (->> files
@@ -190,7 +188,11 @@
         new-file-paths (file-path-set-f new-files)
         added (set/difference new-file-paths old-file-paths)
         deleted (set/difference old-file-paths new-file-paths)
-        modified (set/difference new-file-paths added)]
+        modified (->> (set/intersection new-file-paths old-file-paths)
+                      (filter (fn [path]
+                                (not= (:file/content (get-file-f old-files path))
+                                      (:file/content (get-file-f new-files path)))))
+                      (set))]
     {:added    added
      :modified modified
      :deleted  deleted}))
@@ -229,15 +231,10 @@
                           (assoc file :file/content content)))) added-or-modified))
         (p/then (fn [result]
                   (let [files (map #(dissoc % :file/file :file/handle) result)
-                        non-modified? (fn [file]
-                                        (let [content (:file/content file)
-                                              old-content (:file/content (get-file-f (:file/path file) old-files))]
-                                          (= content old-content)))
-                        non-modified-files (->> (filter non-modified? files)
-                                                (map :file/path))
                         [modified-files modified] (if re-index?
                                                     [files (set modified)]
-                                                    [(remove non-modified? files) (set/difference (set modified) (set non-modified-files))])
+                                                    (let [modified-files (filter (fn [file] (contains? added-or-modified (:file/path file))) files)]
+                                                      [modified-files (set modified)]))
                         diffs (concat
                                (rename-f "remove" deleted)
                                (rename-f "add" added)
@@ -247,7 +244,9 @@
                       (repo-handler/load-repo-to-db! repo
                                                      {:diffs     diffs
                                                       :nfs-files modified-files
-                                                      :refresh? (not re-index?)}))))))))
+                                                      :refresh? (not re-index?)}))
+                    (when (and (util/electron?) (not re-index?))
+                      (db/transact! repo new-files))))))))
 
 (defn- reload-dir!
   ([repo]
@@ -260,7 +259,8 @@
            path-handles (atom {})
            electron? (util/electron?)
            nfs? (not electron?)]
-       (state/set-graph-syncing? true)
+       (when re-index?
+         (state/set-graph-syncing? true))
        (->
         (p/let [handle (idb/get-item handle-path)]
           (when (or handle electron?)   ; electron doesn't store the file handle
@@ -300,19 +300,13 @@
             _ (ok-handler)]
       (state/set-nfs-refreshing! false))))
 
-(defn refactored-version?
-  []
-  (:block/name (storage/get :db-schema)))
-
 (defn refresh!
   [repo ok-handler]
-  (if (refactored-version?)
-    (when repo
-      (state/set-nfs-refreshing! true)
-      (p/let [_ (reload-dir! repo)
-              _ (ok-handler)]
-        (state/set-nfs-refreshing! false)))
-    (rebuild-index! repo ok-handler)))
+  (when repo
+    (state/set-nfs-refreshing! true)
+    (p/let [_ (reload-dir! repo)
+            _ (ok-handler)]
+      (state/set-nfs-refreshing! false))))
 
 (defn supported?
   []

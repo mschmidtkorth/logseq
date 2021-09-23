@@ -1,30 +1,28 @@
 (ns frontend.components.content
-  (:require [rum.core :as rum]
-            [frontend.db :as db]
-            [frontend.format :as format]
-            [frontend.format.protocol :as protocol]
-            [frontend.handler.editor :as editor-handler]
-            [frontend.handler.export :as export-handler]
-            [frontend.handler.image :as image-handler]
-            [frontend.commands :as commands]
-            [frontend.util :as util :refer [profile]]
-            [frontend.state :as state]
-            [frontend.mixins :as mixins]
-            [frontend.ui :as ui]
-            [cljs-bean.core :as bean]
-            [frontend.config :as config]
-            [goog.dom :as gdom]
-            [goog.object :as gobj]
-            [dommy.core :as d]
+  (:require [cljs.pprint :as pprint]
             [clojure.string :as string]
-            [cljs.pprint :as pprint]
-            [frontend.handler.notification :as notification]
+            [dommy.core :as d]
+            [frontend.commands :as commands]
             [frontend.components.editor :as editor]
             [frontend.components.export :as export]
+            [frontend.config :as config]
             [frontend.context.i18n :as i18n]
-            [frontend.text :as text]
+            [frontend.db :as db]
+            [frontend.extensions.srs :as srs]
+            [frontend.format :as format]
+            [frontend.format.protocol :as protocol]
+            [frontend.handler.common :as common-handler]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.image :as image-handler]
+            [frontend.handler.notification :as notification]
             [frontend.handler.page :as page-handler]
-            [frontend.extensions.srs :as srs]))
+            [frontend.mixins :as mixins]
+            [frontend.state :as state]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [goog.dom :as gdom]
+            [goog.object :as gobj]
+            [rum.core :as rum]))
 
 (defn- set-format-js-loading!
   [format value]
@@ -242,6 +240,38 @@
                                false)))}
                "(Dev) Show block data"))]])))))
 
+(rum/defc block-ref-custom-context-menu-content
+  [block block-ref-id]
+  (when (and block block-ref-id)
+    [:div#custom-context-menu
+     [:div.py-1.rounded-md.bg-base-3.shadow-xs
+      (ui/menu-link
+       {:key "open-in-sidebar"
+        :on-click (fn []
+                    (let [block (db/pull [:block/uuid block-ref-id])]
+                      (state/sidebar-add-block!
+                       (state/get-current-repo)
+                       block-ref-id
+                       :block-ref
+                       {:block block}))                    )}
+       "Open in sidebar")
+      (ui/menu-link
+       {:key "copy"
+        :on-click (fn [] (editor-handler/copy-current-ref block-ref-id))}
+       "Copy this reference")
+      (ui/menu-link
+       {:key "delete"
+        :on-click (fn [] (editor-handler/delete-current-ref! block block-ref-id))}
+       "Delete this reference")
+      (ui/menu-link
+       {:key "replace-with-text"
+        :on-click (fn [] (editor-handler/replace-ref-with-text! block block-ref-id))}
+       "Replace with text")
+      (ui/menu-link
+       {:key "replace-with-embed"
+        :on-click (fn [] (editor-handler/replace-ref-with-embed! block block-ref-id))}
+       "Replace with embed")]]))
+
 ;; TODO: content could be changed
 ;; Also, keyboard bindings should only be activated after
 ;; blocks were already selected.
@@ -264,31 +294,25 @@
      (mixins/listen state js/window "contextmenu"
                     (fn [e]
                       (let [target (gobj/get e "target")
-                            block-id (d/attr target "blockid")]
+                            block-id (d/attr target "blockid")
+                            {:keys [block block-ref]} (state/sub :block-ref/context)]
                         (cond
-                          (state/selection?)
+                          block-ref
                           (do
-                            (util/stop e)
-                            (let [client-x (gobj/get e "clientX")
-                                  client-y (gobj/get e "clientY")
-                                  scroll-y (util/cur-doc-top)]
-                              (state/show-custom-context-menu! (custom-context-menu-content))
-                              (when-let [context-menu (d/by-id "custom-context-menu")]
-                                (d/set-style! context-menu
-                                              :left (str client-x "px")
-                                              :top (str (+ scroll-y client-y) "px")))))
+                            (common-handler/show-custom-context-menu!
+                            e
+                            (block-ref-custom-context-menu-content block block-ref))
+                            (state/set-state! :block-ref/context nil))
+
+                          (state/selection?)
+                          (common-handler/show-custom-context-menu!
+                           e
+                           (custom-context-menu-content))
 
                           (and block-id (util/uuid-string? block-id))
-                          (do
-                            (util/stop e)
-                            (let [client-x (gobj/get e "clientX")
-                                  client-y (gobj/get e "clientY")
-                                  scroll-y (util/cur-doc-top)]
-                              (state/show-custom-context-menu! (block-context-menu-content target (cljs.core/uuid block-id)))
-                              (when-let [context-menu (d/by-id "custom-context-menu")]
-                                (d/set-style! context-menu
-                                              :left (str client-x "px")
-                                              :top (str (+ scroll-y client-y) "px")))))
+                          (common-handler/show-custom-context-menu!
+                           e
+                           (block-context-menu-content target (cljs.core/uuid block-id)))
 
                           :else
                           nil))))))

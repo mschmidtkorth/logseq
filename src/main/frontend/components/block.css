@@ -107,7 +107,7 @@
 .block-body ul,
 .block-body ol,
 .block-body dl {
-  margin-bottom: 2em;
+  margin-bottom: 0em;
 
   > li {
     margin: 0;
@@ -154,15 +154,11 @@
   }
 }
 
-.block-ref-no-title {
-    cursor: alias;
-}
-
 .block-ref {
   border-bottom: 0.5px solid;
   border-bottom-color: var(--ls-block-ref-link-text-color);
   cursor: alias;
-  padding: 2px 5px;
+  padding: 2px 0;
   display: inline;
 
   &:hover {
@@ -172,6 +168,22 @@
   .block-content {
     cursor: inherit;
   }
+}
+
+.block-ref-no-title {
+    border-bottom: 0.5px solid;
+    border-bottom-color: var(--ls-block-ref-link-text-color);
+    cursor: alias;
+    padding: 2px 5px;
+    display: block;
+
+    &:hover {
+        color: var(--ls-link-text-hover-color);
+    }
+
+    .block-content {
+        cursor: inherit;
+    }
 }
 
 .page-ref {
@@ -215,10 +227,11 @@
 
 .block-marker {
   padding: 2px 4px;
-  opacity: 0.5;
+  opacity: 0.7;
   font-size: 85%;
   margin: 0 2px 0 0px;
-  font-weight: 600;
+  font-weight: 650;
+  border: 0px;
 }
 
 .marker-switch {
@@ -302,6 +315,11 @@
 .block-ref .ls-block :is(h1, h2),
 .block-ref .editor-inner :is(.h1, .h2) {
   border-bottom: none;
+}
+
+.block-ref :is(h1, h2, h3, h4, h5, h6) {
+    border-bottom: none;
+    font-size: 1rem;
 }
 
 .document-mode .ls-block h1,
@@ -497,4 +515,13 @@ span.cloze-revealed {
 
 .page-property-key {
   color: var(--ls-secondary-text-color);
+}
+
+.block-parents a {
+  color: var(--ls-primary-text-color);
+  opacity: 0.8;
+}
+
+.block-parents a:hover {
+  opacity: 1;
 }

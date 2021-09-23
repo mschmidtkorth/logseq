@@ -1,15 +1,14 @@
 (ns frontend.components.encryption
-  (:require [rum.core :as rum]
-            [promesa.core :as p]
-            [frontend.encrypt :as e]
-            [frontend.util :as util :refer [profile]]
+  (:require [clojure.string :as string]
             [frontend.context.i18n :as i18n]
-            [frontend.db.utils :as db-utils]
-            [clojure.string :as string]
-            [frontend.state :as state]
+            [frontend.encrypt :as e]
             [frontend.handler.metadata :as metadata-handler]
+            [frontend.handler.notification :as notification]
+            [frontend.state :as state]
             [frontend.ui :as ui]
-            [frontend.handler.notification :as notification]))
+            [frontend.util :as util]
+            [promesa.core :as p]
+            [rum.core :as rum]))
 
 (rum/defcs encryption-dialog-inner <
   (rum/local false ::reveal-secret-phrase?)
@@ -58,7 +57,7 @@
   (rum/with-context [[t] i18n/*tongue-context*]
     (let [password (get state ::password)
           password-confirm (get state ::password-confirm)]
-      [:div.sm:w-96
+      [:div
        [:div.sm:flex.sm:items-start
         [:div.mt-3.text-center.sm:mt-0.sm:text-left
          [:h3#modal-headline.text-lg.leading-6.font-medium.font-bold
@@ -108,7 +107,7 @@
 (rum/defcs encryption-setup-dialog-inner
   [state repo-url close-fn]
   (rum/with-context [[t] i18n/*tongue-context*]
-    [:div.sm:w-96
+    [:div
      [:div.sm:flex.sm:items-start
       [:div.mt-3.text-center.sm:mt-0.sm:text-left
        [:h3#modal-headline.text-lg.leading-6.font-medium
@@ -162,7 +161,8 @@
                            (p/let [repo (state/get-current-repo)
                                    keys (e/decrypt-with-passphrase value db-encrypted-secret)]
                              (e/save-key-pair! repo keys)
-                             (close-fn true)))))}
+                             (close-fn true)
+                             (state/set-state! :encryption/graph-parsing? false)))))}
           "Submit"]]]])))
 
 (defn encryption-input-secret-dialog

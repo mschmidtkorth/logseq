@@ -1,19 +1,13 @@
 (ns frontend.modules.file.core
-  (:require [frontend.debug :as debug]
+  (:require [cljs.core.async :as async]
             [clojure.string :as string]
-            [frontend.state :as state]
-            [cljs.core.async :as async]
-            [frontend.db.conn :as conn]
-            [frontend.db.utils :as db-utils]
-            [frontend.db.model :as model]
-            [frontend.db :as db]
             [frontend.config :as config]
             [frontend.date :as date]
-            [frontend.fs :as fs]
-            [frontend.handler.notification :as notification]
+            [frontend.db :as db]
+            [frontend.db.utils :as db-utils]
+            [frontend.state :as state]
             [frontend.util :as util]
-            [frontend.modules.outliner.tree :as tree]
-            [promesa.core :as p]))
+            [frontend.debug :as debug]))
 
 (defn- indented-block-content
   [content spaces-tabs]
@@ -97,12 +91,15 @@
 
 (defn push-to-write-chan
   [files & opts]
-  (let [repo (state/get-current-repo)]
-    (when-let [chan (state/get-file-write-chan)]
-      (let [chan-callback (:chan-callback opts)]
-        (async/put! chan [repo files opts])
-        (when chan-callback
-          (chan-callback))))))
+  (let [repo (state/get-current-repo)
+        chan (state/get-file-write-chan)]
+    (assert (some? chan) "File write chan shouldn't be nil")
+    (let [chan-callback (:chan-callback opts)]
+      (async/put! chan [repo files opts])
+      (doseq [file (map first files)]
+        (debug/set-ack-step! file :pushed-to-channel))
+      (when chan-callback
+        (chan-callback)))))
 
 (defn- transact-file-tx-if-not-exists!
   [page ok-handler]

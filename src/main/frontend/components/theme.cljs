@@ -1,15 +1,14 @@
 (ns frontend.components.theme
-  (:require [rum.core :as rum]
-            [frontend.extensions.pdf.highlights :as pdf]
-            [frontend.util :as util]
-            [frontend.ui :as ui]
-            [frontend.handler.ui :as ui-handler]
+  (:require [frontend.extensions.pdf.highlights :as pdf]
+            [frontend.handler.plugin :refer [lsp-enabled?] :as plugin-handler]
             [frontend.handler.route :as route-handler]
-            [frontend.handler.plugin :as plugin-handler]
-            [frontend.components.svg :as svg]))
+            [frontend.handler.ui :as ui-handler]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [rum.core :as rum]))
 
 (rum/defc container
-  [{:keys [route theme on-click current-repo nfs-granted? db-restoring? sidebar-open? system-theme?] :as props} child]
+  [{:keys [t route theme on-click current-repo nfs-granted? db-restoring? sidebar-open? system-theme?] :as props} child]
   (rum/use-effect!
    #(let [doc js/document.documentElement
           cls (.-classList doc)]
@@ -25,11 +24,16 @@
    [sidebar-open?])
 
   (rum/use-effect!
-    (fn []
-      (ui-handler/add-style-if-exists!)
-      (pdf/reset-current-pdf!)
-      (plugin-handler/hook-plugin-app :current-graph-changed {}))
-    [current-repo])
+   #(if lsp-enabled?
+      (plugin-handler/setup-install-listener! t))
+   [t])
+
+  (rum/use-effect!
+   (fn []
+     (ui-handler/add-style-if-exists!)
+     (pdf/reset-current-pdf!)
+     (plugin-handler/hook-plugin-app :current-graph-changed {}))
+   [current-repo])
 
   (rum/use-effect!
    #(let [db-restored? (false? db-restoring?)]

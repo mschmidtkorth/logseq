@@ -1072,17 +1072,15 @@
     "@pixi/settings" "6.0.4"
     "@pixi/utils" "6.0.4"
 
-"@pixi/graphics@^6.0.2":
-  version "6.0.4"
-  resolved "https://registry.yarnpkg.com/@pixi/graphics/-/graphics-6.0.4.tgz#3d2e75acb8145a80275b194413b06fb28505c663"
-  integrity sha512-CybR+DBkGB5llypPeib2A0J13mnPQwlQDqLRhlhXKkYxXQKXlPk5MWA7ZEg+4wKeqUUlrC+k70e5ZFYLC3AgEQ==
-  dependencies:
-    "@pixi/constants" "6.0.4"
-    "@pixi/core" "6.0.4"
-    "@pixi/display" "6.0.4"
-    "@pixi/math" "6.0.4"
-    "@pixi/sprite" "6.0.4"
-    "@pixi/utils" "6.0.4"
+"@pixi/graphics-smooth@^0.0.13":
+  version "0.0.13"
+  resolved "https://registry.yarnpkg.com/@pixi/graphics-smooth/-/graphics-smooth-0.0.13.tgz#a34115b332d40f1b7714553e0de4d96aaf915ce0"
+  integrity sha512-16sNLom9LI85YYeZgUtWnYPqy5M0aQCCK92p5K55MolJaHa3iYg/KMShGOxtsgwuWyC1v2Dnjs2Pycf9bxCNZQ==
+
+"@pixi/graphics@^6.1.2":
+  version "6.1.2"
+  resolved "https://registry.yarnpkg.com/@pixi/graphics/-/graphics-6.1.2.tgz#f065b5fe06ae6bd8db036630f607c9f9422254a8"
+  integrity sha512-aNQ9242RV3Lg4hLmU4rN9jGKhE84vjkxEWswpyqChDqh5vOeahSjZo4DR+qIsEUwEo/OgRY1kvpWY4+2xzMSjg==
 
 "@pixi/interaction@^6.0.2":
   version "6.0.4"
@@ -6175,10 +6173,10 @@ mkdirp@^0.5.0, mkdirp@^0.5.4, mkdirp@~0.5.1:
   dependencies:
     minimist "^1.2.5"
 
-mldoc@0.9.8:
-  version "0.9.8"
-  resolved "https://registry.yarnpkg.com/mldoc/-/mldoc-0.9.8.tgz#176cd5383002eadd2931a6e6ad54034ff67a8608"
-  integrity sha512-qj4issvoDV0hKR6zS3BLOZQkqaBb0oh4nzI/rxdfsxVf5KRBRdka0HVZ3ayLXaozWv9ozhd3qSYIM5m57VNB8w==
+mldoc@1.0.7:
+  version "1.0.7"
+  resolved "https://registry.yarnpkg.com/mldoc/-/mldoc-1.0.7.tgz#b2034f29973eb278ac003003149c4b0220fa480e"
+  integrity sha512-XbPTNJpgx/OslszztQshe5T7QUHSuKXG+dqOXaU5R3O3U6sFgpPYBx6CNgmVZqAwxrnhdQQV6IM3E8ETGYzEyA==
   dependencies:
     yargs "^12.0.2"
 
@@ -6906,17 +6904,18 @@ pinkie@^2.0.0:
   resolved "https://registry.yarnpkg.com/pinkie/-/pinkie-2.0.4.tgz"
   integrity sha1-clVrgM+g1IqXToDnckjoDtT3+HA=
 
-pixi-graph-fork@^0.1.4:
-  version "0.1.4"
-  resolved "https://registry.yarnpkg.com/pixi-graph-fork/-/pixi-graph-fork-0.1.4.tgz#9191daa6512e7440c4a767c6d7bcef547a33a5a2"
-  integrity sha512-qR8MJ/q1TL812LuRqaGjHA6xIkZomOINZGH+7tKMA15feow1ud+tzFVb1pKsnvmSy/uWhhOUOVLrqLTf3vYr3Q==
+pixi-graph-fork@^0.1.6:
+  version "0.1.6"
+  resolved "https://registry.yarnpkg.com/pixi-graph-fork/-/pixi-graph-fork-0.1.6.tgz#f5de3148c40750306f477f32590305cb90d9022c"
+  integrity sha512-YLjVpYy3uyEODJOzu8UbdpilHT8ZU+nTgz0MnlyJS7W1qlmXvlxzR3pAarhAcZctzC/sArLwKubnpJa6wVoI8w==
   dependencies:
     "@pixi-essentials/cull" "^1.1.0"
     "@pixi/app" "^6.0.2"
     "@pixi/constants" "^6.0.2"
     "@pixi/core" "^6.0.2"
     "@pixi/display" "^6.0.2"
-    "@pixi/graphics" "^6.0.2"
+    "@pixi/graphics" "^6.1.2"
+    "@pixi/graphics-smooth" "^0.0.13"
     "@pixi/interaction" "^6.0.2"
     "@pixi/loaders" "^6.0.2"
     "@pixi/math" "^6.0.2"
@@ -7617,6 +7616,8 @@ react-icons@^2.2.7:
   version "2.2.7"
   resolved "https://registry.yarnpkg.com/react-icons/-/react-icons-2.2.7.tgz#d7860826b258557510dac10680abea5ca23cf650"
   integrity sha512-0n4lcGqzJFcIQLoQytLdJCE0DKSA9dkwEZRYoGrIDJZFvIT6Hbajx5mv9geqhqFiNjUgtxg8kPyDfjlhymbGFg==
+  dependencies:
+    react-icon-base "2.1.0"
 
 react-is@^16.3.1, react-is@^16.8.1:
   version "16.13.1"

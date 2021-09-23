@@ -1,13 +1,12 @@
 (ns frontend.components.hierarchy
-  (:require [frontend.search :as search]
-            [clojure.string :as string]
+  (:require [clojure.string :as string]
             [frontend.components.block :as block]
-            [rum.core :as rum]
-            [frontend.ui :as ui]
-            [medley.core :as medley]
             [frontend.db :as db]
             [frontend.state :as state]
-            [frontend.text :as text]))
+            [frontend.text :as text]
+            [frontend.ui :as ui]
+            [medley.core :as medley]
+            [rum.core :as rum]))
 
 ;; FIXME: use block/namespace to get the relation
 (defn get-relation
@@ -44,4 +43,4 @@
                                          {}
                                          page))))
              (interpose [:span.mx-2.opacity-30 "/"]))])]
-        true)])))
+        {:default-collapsed? true})])))

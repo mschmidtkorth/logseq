@@ -1,13 +1,13 @@
 (ns frontend.handler.image
-  (:require [goog.object :as gobj]
-            [frontend.handler.notification :as notification]
-            [frontend.util :as util :refer [profile]]
+  (:require [clojure.string :as string]
             [frontend.config :as config]
+            [frontend.fs :as fs]
+            [frontend.handler.notification :as notification]
             [frontend.image :as image]
             [frontend.state :as state]
-            [frontend.fs :as fs]
-            [clojure.string :as string]
-            [goog.dom :as gdom]))
+            [frontend.util :as util]
+            [goog.dom :as gdom]
+            [goog.object :as gobj]))
 
 (defn render-local-images!
   []
@@ -22,7 +22,8 @@
                               (and src
                                    (not (or (util/starts-with? src "http://")
                                             (util/starts-with? src "https://")
-                                            (util/starts-with? src "blob:"))))))
+                                            (util/starts-with? src "blob:")
+                                            (util/starts-with? src "data:"))))))
                           images)]
         (doseq [img local-images]
           (gobj/set img

@@ -1,28 +1,23 @@
 (ns frontend.components.right-sidebar
-  (:require [rum.core :as rum]
-            [frontend.ui :as ui]
-            [frontend.components.svg :as svg]
-            [frontend.components.page :as page]
-            [frontend.components.block :as block]
-            [frontend.extensions.graph :as graph]
-            [frontend.components.onboarding :as onboarding]
-            [frontend.handler.route :as route-handler]
-            [frontend.handler.page :as page-handler]
-            [frontend.handler.graph :as graph-handler]
-            [frontend.state :as state]
-            [frontend.db :as db]
-            [frontend.db.model :as db-model]
-            [frontend.util :as util]
-            [frontend.date :as date]
-            [medley.core :as medley]
+  (:require [cljs-bean.core :as bean]
             [clojure.string :as string]
-            [frontend.extensions.slide :as slide]
-            [cljs-bean.core :as bean]
-            [goog.object :as gobj]
+            [frontend.components.block :as block]
+            [frontend.components.onboarding :as onboarding]
+            [frontend.components.page :as page]
+            [frontend.components.svg :as svg]
             [frontend.context.i18n :as i18n]
-            [reitit.frontend.easy :as rfe]
+            [frontend.date :as date]
+            [frontend.db :as db]
             [frontend.db-mixins :as db-mixins]
-            [frontend.config :as config]))
+            [frontend.db.model :as db-model]
+            [frontend.extensions.slide :as slide]
+            [frontend.state :as state]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [goog.object :as gobj]
+            [medley.core :as medley]
+            [reitit.frontend.easy :as rfe]
+            [rum.core :as rum]))
 
 (rum/defc toggle
   []
@@ -44,27 +39,6 @@
               :sidebar?   true
               :repo       repo}))
 
-(defn recent-pages
-  []
-  (let [pages (->> (db/get-key-value :recent/pages)
-                   (remove nil?)
-                   (remove #(= (string/lower-case %) "contents")))]
-    [:div.recent-pages.text-sm.flex-col.flex.ml-3.mt-2
-     (if (seq pages)
-       (for [page pages]
-         [:a.page-ref.mb-1 {:key      (str "recent-page-" page)
-                   :href     (rfe/href :page {:name page})
-                   :on-click (fn [e]
-                               (when (gobj/get e "shiftKey")
-                                 (when-let [page (db/pull [:block/name (string/lower-case page)])]
-                                   (state/sidebar-add-block!
-                                    (state/get-current-repo)
-                                    (:db/id page)
-                                    :page
-                                    {:page page}))
-                                 (.preventDefault e)))}
-          page]))]))
-
 (rum/defc contents < rum/reactive db-mixins/query
   []
   [:div.contents.flex-col.flex.ml-3
@@ -78,9 +52,6 @@
     [(or (state/get-favorites-name)
          (t :right-side-bar/favorites))
      (contents)]
-
-    :recent
-    [(t :right-side-bar/recent) (recent-pages)]
 
     :help
     [(t :right-side-bar/help) (onboarding/help)]
@@ -189,7 +160,7 @@
                (get-in match [:path-params :path])
 
                (date/journal-name))]
-    (if page
+    (when page
       (string/lower-case page))))
 
 (defn get-current-page
@@ -242,7 +213,7 @@
     (rum/with-context [[t] i18n/*tongue-context*]
       [:div#right-sidebar.cp__right-sidebar.h-screen
        {:class (if sidebar-open? "open" "closed")}
-       (if sidebar-open?
+       (when sidebar-open?
          [:div.cp__right-sidebar-inner.flex.flex-col.h-full#right-sidebar-container
 
           (sidebar-resizer)
@@ -254,12 +225,6 @@
                                                              (state/sidebar-add-block! repo "contents" :contents nil))}
               (or (state/get-favorites-name)
                   (t :right-side-bar/favorites))]]
-
-            [:div.ml-4.text-sm
-             [:a.cp__right-sidebar-settings-btn {:on-click (fn [_e]
-                                                             (state/sidebar-add-block! repo "recent" :recent nil))}
-
-              (t :right-side-bar/recent)]]
 
             [:div.ml-4.text-sm
              [:a.cp__right-sidebar-settings-btn {:on-click (fn []

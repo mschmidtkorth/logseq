@@ -1,7 +1,8 @@
 (ns frontend.mixins
   (:require [rum.core :as rum]
             [goog.dom :as dom]
-            [frontend.util :refer [profile]])
+            [frontend.util :refer [profile]]
+            [frontend.state :as state])
   (:import [goog.events EventHandler]))
 
 (defn detach
@@ -103,9 +104,9 @@
 (defn on-key-down
   ([state keycode-map]
    (on-key-down state keycode-map {}))
-  ([state keycode-map {:keys [not-matched-handler all-handler]}]
+  ([state keycode-map {:keys [not-matched-handler all-handler target]}]
    (let [node (rum/dom-node state)]
-     (listen state js/window "keydown"
+     (listen state (or target js/window) "keydown"
              (fn [e]
                (let [key-code (.-keyCode e)]
                  (if-let [f (get keycode-map key-code)]
@@ -162,6 +163,15 @@
                  (handler (:rum/args state))
                  state)})
 
+(def component-editing-mode
+  {:will-mount
+   (fn [state]
+     (state/set-block-component-editing-mode! true)
+     state)
+   :will-unmount
+   (fn [state]
+     (state/set-block-component-editing-mode! false)
+     state)})
 
 (defn perf-measure-mixin
   [desc]

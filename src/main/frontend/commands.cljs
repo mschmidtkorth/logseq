@@ -1,22 +1,22 @@
 (ns frontend.commands
-  (:require [frontend.util :as util]
+  (:require [clojure.string :as string]
+            [frontend.config :as config]
+            [frontend.date :as date]
+            [frontend.db :as db]
+            [frontend.db.utils :as db-util]
+            [frontend.handler.draw :as draw]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.plugin :as plugin-handler]
+            [frontend.extensions.video.youtube :as youtube]
+            [frontend.search :as search]
+            [frontend.state :as state]
+            [frontend.text :as text]
+            [frontend.util :as util]
             [frontend.util.cursor :as cursor]
             [frontend.util.marker :as marker]
             [frontend.util.priority :as priority]
-            [frontend.date :as date]
-            [frontend.state :as state]
-            [frontend.search :as search]
-            [frontend.config :as config]
-            [frontend.db.utils :as db-util]
-            [frontend.db :as db]
-            [clojure.string :as string]
             [goog.dom :as gdom]
             [goog.object :as gobj]
-            [frontend.format :as format]
-            [frontend.handler.common :as common-handler]
-            [frontend.handler.plugin :as plugin-handler]
-            [frontend.handler.draw :as draw]
-            [frontend.handler.notification :as notification]
             [promesa.core :as p]))
 
 ;; TODO: move to frontend.handler.editor.commands
@@ -29,13 +29,42 @@
 (defonce *angle-bracket-caret-pos (atom nil))
 (defonce *current-command (atom nil))
 
+(def query-doc
+  [:div {:on-mouse-down (fn [e] (.stopPropagation e))}
+   [:div.font-medium.text-lg.mb-2 "Query examples:"]
+   [:ul.mb-1
+    [:li.mb-1 [:code "{{query #tag}}"]]
+    [:li.mb-1 [:code "{{query [[page]]}}"]]
+    [:li.mb-1 [:code "{{query \"full-text search\"}}"]]
+    [:li.mb-1 [:code "{{query (and [[project]] (task NOW LATER))}}"]]
+    [:li.mb-1 [:code "{{query (or [[page 1]] [[page 2]])}}"]]
+    [:li.mb-1 [:code "{{query (and (between -7d +7d) (task DONE))}}"]]
+    [:li.mb-1 [:code "{{query (property key value)}}"]]
+    [:li.mb-1 [:code "{{query (page-tags #tag)}}"]]]
+
+   [:p "Check more examples at "
+    [:a {:href "https://logseq.github.io/#/page/queries"
+         :target "_blank"}
+     "Queries documentation"]
+    "."]])
+
 (def link-steps [[:editor/input (str slash "link")]
                  [:editor/show-input [{:command :link
                                        :id :link
-                                       :placeholder "Link"}
+                                       :placeholder "Link"
+                                       :autoFocus true}
                                       {:command :link
                                        :id :label
                                        :placeholder "Label"}]]])
+
+(def image-link-steps [[:editor/input (str slash "link")]
+                       [:editor/show-input [{:command :image-link
+                                             :id :link
+                                             :placeholder "Link"
+                                             :autoFocus true}
+                                            {:command :image-link
+                                             :id :label
+                                             :placeholder "Label"}]]])
 
 (def zotero-steps [[:editor/input (str slash "zotero")]
                    [:editor/show-zotero]])
@@ -122,7 +151,7 @@
 (defonce *initial-commands (atom nil))
 
 (defonce *first-command-group
-  {"Page Reference" "BASIC"
+  {"Page reference" "BASIC"
    "Tomorrow" "TIME & DATE"
    "LATER" "TASK"
    "A" "PRIORITY"
@@ -133,20 +162,16 @@
   ([type]
    (->block type nil))
   ([type optional]
-   (let [format (get (state/get-edit-block) :block/format :markdown)
-         org? (= format :org)
-         t (string/lower-case type)
-         markdown-src? (and (= format :markdown) (= t "src"))
-         left (cond
-                markdown-src?
-                "```"
-
-                :else
-                (util/format "#+BEGIN_%s"
-                             (string/upper-case type)))
-         right (if markdown-src?
-                 (str "\n```")
-                 (util/format "\n#+END_%s" (string/upper-case type)))
+   (let [format (get (state/get-edit-block) :block/format)
+         org-src? (and (= format :org)
+                       (= (string/lower-case type) "src"))
+         [left right] (cond
+                        org-src?
+                        (->> ["#+BEGIN_%s" "\n#+END_%s"]
+                             (map #(util/format %
+                                                (string/upper-case type))))
+                        :else
+                        ["```" "\n```"])
          template (str
                    left
                    (if optional (str " " optional) "")
@@ -155,7 +180,8 @@
          backward-pos (if (= type "src")
                         (+ 1 (count right))
                         (count right))]
-     [[:editor/input template {:last-pattern angle-bracket
+     [[:editor/input template {:type "block"
+                               :last-pattern angle-bracket
                                :backward-pos backward-pos}]])))
 
 (defn ->properties
@@ -163,7 +189,8 @@
   (let [template (util/format
                   ":PROPERTIES:\n:: \n:END:\n")
         backward-pos 9]
-    [[:editor/input template {:last-pattern angle-bracket
+    [[:editor/input template {:type "properties"
+                              :last-pattern angle-bracket
                               :backward-pos backward-pos}]]))
 
 ;; https://orgmode.org/manual/Structure-Templates.html
@@ -201,14 +228,14 @@
   (->>
    (concat
     ;; basic
-    [["Page Reference" [[:editor/input "[[]]" {:backward-pos 2}]
+    [["Page reference" [[:editor/input "[[]]" {:backward-pos 2}]
                         [:editor/search-page]] "Create a backlink to a page"]
-     ["Page Embed" (embed-page) "Embed a page here"]
-     ["Block Reference" [[:editor/input "(())" {:backward-pos 2}]
-                         [:editor/search-block :reference]] "Create a backlink to a blcok"]
-     ["Block Embed" (embed-block) "Embed a block here" "Embed a block here"]
+     ["Page embed" (embed-page) "Embed a page here"]
+     ["Block reference" [[:editor/input "(())" {:backward-pos 2}]
+                         [:editor/search-block :reference]] "Create a backlink to a block"]
+     ["Block embed" (embed-block) "Embed a block here" "Embed a block here"]
      ["Link" link-steps "Create a HTTP link"]
-     ["Image Link" link-steps "Create a HTTP link to a image"]
+     ["Image link" image-link-steps "Create a HTTP link to a image"]
      (when (state/markdown?)
        ["Underline" [[:editor/input "<ins></ins>"
                       {:last-pattern slash
@@ -230,8 +257,8 @@
     [["Tomorrow" #(get-page-ref-text (date/tomorrow)) "Insert the date of tomorrow"]
      ["Yesterday" #(get-page-ref-text (date/yesterday)) "Insert the date of yesterday"]
      ["Today" #(get-page-ref-text (date/today)) "Insert the date of today"]
-     ["Current Time" #(date/get-current-time) "Insert current time"]
-     ["Date Picker" [[:editor/show-date-picker]] "Pick a date and insert here"]]
+     ["Current time" #(date/get-current-time) "Insert current time"]
+     ["Date picker" [[:editor/show-date-picker]] "Pick a date and insert here"]]
 
     ;; task management
     (get-preferred-workflow)
@@ -251,7 +278,7 @@
 
     ;; advanced
 
-    [["Query" [[:editor/input "{{query }}" {:backward-pos 2}]] "Create a DataScript query"]
+    [["Query" [[:editor/input "{{query }}" {:backward-pos 2}]] query-doc]
      ["Zotero" zotero-steps "Import Zotero journal article"]
      ["Query table function" [[:editor/input "{{function }}" {:backward-pos 2}]] "Create a query table function"]
      ["Calculator" [[:editor/input "```calc\n\n```" {:backward-pos 4}]
@@ -265,18 +292,20 @@
                  text)) "Draw a graph with Excalidraw"]
 
      (when (util/zh-CN-supported?)
-       ["Embed Bilibili Video" [[:editor/input "{{bilibili }}" {:last-pattern slash
+       ["Embed Bilibili video" [[:editor/input "{{bilibili }}" {:last-pattern slash
                                                                 :backward-pos 2}]]])
      ["Embed HTML " (->inline "html")]
 
-     ["Embed Youtube Video" [[:editor/input "{{youtube }}" {:last-pattern slash
+     ["Embed Youtube video" [[:editor/input "{{youtube }}" {:last-pattern slash
                                                             :backward-pos 2}]]]
 
-     ["Embed Vimeo Video" [[:editor/input "{{vimeo }}" {:last-pattern slash
+     ["Embed Youtube timestamp" [[:youtube/insert-timestamp]]]
+
+     ["Embed Vimeo video" [[:editor/input "{{vimeo }}" {:last-pattern slash
                                                         :backward-pos 2}]]]
 
-     ["Embed Twitter" [[:editor/input "{{tweet }}" {:last-pattern slash
-                                                    :backward-pos 2}]]]]
+     ["Embed Twitter tweet" [[:editor/input "{{tweet }}" {:last-pattern slash
+                                                          :backward-pos 2}]]]]
 
     @*extend-slash-commands
     ;; Allow user to modify or extend, should specify how to extend.
@@ -299,9 +328,9 @@
   (when restore-slash-caret-pos?
     (reset! *slash-caret-pos nil))
   (reset! *show-commands false)
-  (reset! *matched-commands @*initial-commands)
   (reset! *angle-bracket-caret-pos nil)
   (reset! *show-block-commands false)
+  (reset! *matched-commands @*initial-commands)
   (reset! *matched-block-commands (block-commands-map)))
 
 (defn insert!
@@ -322,10 +351,13 @@
           space? (when (and last-pattern prefix)
                    (let [s (when-let [last-index (string/last-index-of prefix last-pattern)]
                              (util/safe-subs prefix 0 last-index))]
-                     (not (and s
-                               (string/ends-with? s "(")
-                               (or (string/starts-with? last-pattern "((")
-                                   (string/starts-with? last-pattern "[["))))))
+                     (not
+                      (or
+                       (and s
+                            (string/ends-with? s "(")
+                            (or (string/starts-with? last-pattern "((")
+                                (string/starts-with? last-pattern "[[")))
+                       (string/starts-with? s "{{embed")))))
           space? (if (and space? (string/starts-with? last-pattern "#[["))
                    false
                    space?)
@@ -452,7 +484,20 @@
 
 (defmethod handle-step :editor/input [[_ value option]]
   (when-let [input-id (state/get-edit-input-id)]
-    (insert! input-id value option)))
+    (let [last-pattern (:last-pattern option)
+          type (:type option)
+          input (gdom/getElement input-id)
+          content (gobj/get input "value")
+          pos (cursor/pos input)
+          pos (if last-pattern
+                (string/last-index-of content last-pattern pos)
+                pos)
+          beginning-of-line? (text/beginning-of-line content pos)
+          value (if (and (contains? #{"block" "properties"} type)
+                         (not beginning-of-line?))
+                  (str "\n" value)
+                  value)]
+      (insert! input-id value option))))
 
 (defmethod handle-step :editor/cursor-back [[_ n]]
   (when-let [input-id (state/get-edit-input-id)]
@@ -562,6 +607,11 @@
 
 (defmethod handle-step :editor/show-zotero [[_]]
   (state/set-editor-show-zotero! true))
+
+(defmethod handle-step :youtube/insert-timestamp [[_]]
+  (let [input-id (state/get-edit-input-id)
+        macro (youtube/gen-youtube-ts-macro)]
+    (insert! input-id macro {})))
 
 (defmethod handle-step :editor/show-date-picker [[_ type]]
   (if (and

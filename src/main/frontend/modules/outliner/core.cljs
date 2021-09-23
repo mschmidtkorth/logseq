@@ -1,17 +1,16 @@
 (ns frontend.modules.outliner.core
-  (:require [frontend.modules.outliner.tree :as tree]
+  (:require [clojure.set :as set]
+            [clojure.zip :as zip]
             [frontend.db :as db]
             [frontend.db-schema :as db-schema]
-            [frontend.db.outliner :as db-outliner]
             [frontend.db.conn :as conn]
-            [frontend.modules.outliner.utils :as outliner-u]
-            [frontend.modules.outliner.state :as outliner-state]
-            [frontend.state :as state]
-            [clojure.set :as set]
-            [clojure.zip :as zip]
+            [frontend.db.outliner :as db-outliner]
             [frontend.modules.outliner.datascript :as ds]
-            [frontend.util :as util]
-            [frontend.util.property :as property]))
+            [frontend.modules.outliner.state :as outliner-state]
+            [frontend.modules.outliner.tree :as tree]
+            [frontend.modules.outliner.utils :as outliner-u]
+            [frontend.state :as state]
+            [frontend.util :as util]))
 
 (defrecord Block [data])
 
@@ -595,17 +594,23 @@
                   (and (not sibling?)
                        (= (tree/-get-left-id root) target-node-id)
                        (= (tree/-get-parent-id root) target-node-id)))
-      (ds/auto-transact!
-       [txs-state (ds/new-outliner-txs-state)] {:outliner-op :move-subtree}
-       (let [left-node-id (tree/-get-left-id root)
-             right-node (tree/-get-right root)]
-         (when (tree/satisfied-inode? right-node)
-           (let [new-right-node (tree/-set-left-id right-node left-node-id)]
-             (tree/-save new-right-node txs-state)))
-         (let [new-root (first (if sibling?
-                                 (insert-node-as-sibling txs-state root target-node)
-                                 (insert-node-as-first-child txs-state root target-node)))]
-           (set-nodes-page&file new-root target-node txs-state)))))))
+      (let [root-page (:db/id (:block/page (:data root)))
+            target-page (:db/id (:block/page (:data target-node)))
+            opts (cond-> {:outliner-op :move-subtree}
+                   (not= root-page target-page)
+                   (assoc :from-page root-page
+                          :target-page target-page))]
+        (ds/auto-transact!
+        [txs-state (ds/new-outliner-txs-state)] opts
+        (let [left-node-id (tree/-get-left-id root)
+              right-node (tree/-get-right root)]
+          (when (tree/satisfied-inode? right-node)
+            (let [new-right-node (tree/-set-left-id right-node left-node-id)]
+              (tree/-save new-right-node txs-state)))
+          (let [new-root (first (if sibling?
+                                  (insert-node-as-sibling txs-state root target-node)
+                                  (insert-node-as-first-child txs-state root target-node)))]
+            (set-nodes-page&file new-root target-node txs-state))))))))
 
 (defn get-right-node
   [node]

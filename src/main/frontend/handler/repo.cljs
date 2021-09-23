@@ -5,6 +5,7 @@
             [frontend.config :as config]
             [frontend.date :as date]
             [frontend.db :as db]
+            [frontend.db.model :as db-model]
             [frontend.dicts :as dicts]
             [frontend.encrypt :as encrypt]
             [frontend.format :as format]
@@ -26,7 +27,8 @@
             [frontend.util :as util]
             [lambdaisland.glogi :as log]
             [promesa.core :as p]
-            [shadow.resource :as rc]))
+            [shadow.resource :as rc]
+            [clojure.set :as set]))
 
 ;; Project settings should be checked in two situations:
 ;; 1. User changes the config.edn directly in logseq.com (fn: alter-file)
@@ -98,8 +100,8 @@
            title (date/today)
            file-name (date/journal-title->default title)
            default-content (util/default-content-with-title format)
-           template (state/get-journal-template)
-           template (if (and template
+           template (state/get-default-journal-template)
+           template (when (and template
                              (not (string/blank? template)))
                       template)
            content (cond
@@ -147,10 +149,11 @@
        (state/pub-event! [:page/create-today-journal repo-url])))))
 
 (defn- remove-non-exists-refs!
-  [data]
-  (let [block-ids (->> (map :block/uuid data)
-                       (remove nil?)
-                       (set))
+  [data all-block-ids]
+  (let [block-ids (->> (->> (map :block/uuid data)
+                        (remove nil?)
+                        (set))
+                       (set/union (set all-block-ids)))
         keep-block-ref-f (fn [refs]
                            (filter (fn [ref]
                                      (if (and (vector? ref)
@@ -169,7 +172,9 @@
   (let [files (map #(select-keys % [:file/path :file/last-modified-at]) files)
         all-data (-> (concat delete-files delete-blocks files blocks-pages)
                      (util/remove-nils))
-        all-data (if refresh? all-data (remove-non-exists-refs! all-data))]
+        all-data (if refresh?
+                   (remove-non-exists-refs! all-data (db-model/get-all-block-uuids))
+                   (remove-non-exists-refs! all-data nil))]
     (db/transact! repo-url all-data)))
 
 (defn- load-pages-metadata!
@@ -237,10 +242,10 @@
     (parse-files-and-create-default-files-inner! repo-url files delete-files delete-blocks file-paths first-clone? db-encrypted? re-render? re-render-opts metadata opts)))
 
 (defn parse-files-and-load-to-db!
-  [repo-url files {:keys [first-clone? delete-files delete-blocks re-render? re-render-opts] :as opts
+  [repo-url files {:keys [first-clone? delete-files delete-blocks re-render? re-render-opts refresh?] :as opts
                    :or {re-render? true}}]
   (state/set-loading-files! false)
-  (state/set-importing-to-db! true)
+  (when-not refresh? (state/set-importing-to-db! true))
   (let [file-paths (map :file/path files)]
     (let [metadata-file (config/get-metadata-path)
           metadata-content (some #(when (= (:file/path %) metadata-file)
@@ -251,6 +256,7 @@
           db-encrypted-secret (if db-encrypted? (:db/encrypted-secret metadata) nil)]
       (if db-encrypted?
         (let [close-fn #(parse-files-and-create-default-files! repo-url files delete-files delete-blocks file-paths first-clone? db-encrypted? re-render? re-render-opts metadata opts)]
+          (state/set-state! :encryption/graph-parsing? true)
           (state/pub-event! [:modal/encryption-input-secret-dialog repo-url
                              db-encrypted-secret
                              close-fn]))
@@ -299,7 +305,7 @@
               remove-files (filter-diffs "remove")
               modify-files (filter-diffs "modify")
               add-files (filter-diffs "add")
-              delete-files (if (seq remove-files)
+              delete-files (when (seq remove-files)
                              (db/delete-files remove-files))
               delete-blocks (db/delete-blocks repo-url remove-files true)
               delete-blocks (->>
@@ -625,6 +631,7 @@
 
 (defn re-index!
   [nfs-rebuild-index! ok-handler]
+  (route-handler/redirect-to-home!)
   (when-let [repo (state/get-current-repo)]
     (let [local? (config/local-db? repo)]
       (if local?

@@ -1,36 +1,34 @@
 (ns frontend.handler.page
-  (:require [clojure.string :as string]
-            [frontend.db :as db]
+  (:require [cljs.reader :as reader]
+            [clojure.string :as string]
+            [clojure.walk :as walk]
             [datascript.core :as d]
-            [frontend.state :as state]
-            [frontend.util :as util :refer [profile]]
-            [frontend.util.cursor :as cursor]
-            [frontend.config :as config]
-            [frontend.handler.common :as common-handler]
-            [frontend.handler.route :as route-handler]
-            [frontend.handler.repo :as repo-handler]
-            [frontend.handler.editor :as editor-handler]
-            [frontend.handler.web.nfs :as web-nfs]
-            [frontend.handler.notification :as notification]
-            [frontend.handler.config :as config-handler]
-            [frontend.handler.ui :as ui-handler]
-            [frontend.modules.outliner.file :as outliner-file]
-            [frontend.modules.outliner.core :as outliner-core]
-            [frontend.modules.outliner.tree :as outliner-tree]
             [frontend.commands :as commands]
+            [frontend.config :as config]
             [frontend.date :as date]
+            [frontend.db :as db]
             [frontend.db-schema :as db-schema]
             [frontend.db.model :as model]
-            [clojure.walk :as walk]
-            [frontend.git :as git]
-            [frontend.fs :as fs]
-            [frontend.util.property :as property]
-            [promesa.core :as p]
-            [lambdaisland.glogi :as log]
             [frontend.format.block :as block]
-            [cljs.reader :as reader]
+            [frontend.fs :as fs]
+            [frontend.git :as git]
+            [frontend.handler.common :as common-handler]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.repo :as repo-handler]
+            [frontend.handler.route :as route-handler]
+            [frontend.handler.ui :as ui-handler]
+            [frontend.handler.web.nfs :as web-nfs]
+            [frontend.modules.outliner.core :as outliner-core]
+            [frontend.modules.outliner.file :as outliner-file]
+            [frontend.modules.outliner.tree :as outliner-tree]
+            [frontend.state :as state]
+            [frontend.util :as util]
+            [frontend.util.cursor :as cursor]
+            [frontend.util.property :as property]
             [goog.object :as gobj]
-            [clojure.data :as data]))
+            [lambdaisland.glogi :as log]
+            [promesa.core :as p]))
 
 (defn- get-directory
   [journal?]
@@ -117,7 +115,8 @@
 
          (when redirect?
            (route-handler/redirect! {:to          :page
-                                     :path-params {:name page}})))))))
+                                     :path-params {:name page}}))
+         page)))))
 
 (defn page-add-property!
   [page-name key value]
@@ -190,43 +189,46 @@
      (map :block/body blocks))
     @plugins))
 
+(defn delete-file!
+  [repo page-name]
+  (let [file (db/get-page-file page-name)
+        file-path (:file/path file)]
+    ;; delete file
+    (when-not (string/blank? file-path)
+      (db/transact! [[:db.fn/retractEntity [:file/path file-path]]])
+      (->
+       (p/let [_ (or (config/local-db? repo) (git/remove-file repo file-path))
+               _ (fs/unlink! repo (config/get-repo-path repo file-path) nil)]
+         (common-handler/check-changed-files-status)
+         (repo-handler/push-if-auto-enabled! repo))
+       (p/catch (fn [err]
+                  (js/console.error "error: " err)))))))
+
 (defn delete!
   [page-name ok-handler]
   (when page-name
     (when-let [repo (state/get-current-repo)]
-      (let [page-name (string/lower-case page-name)]
-        (let [file (db/get-page-file page-name)
-              file-path (:file/path file)]
-          ;; delete file
-          (when-not (string/blank? file-path)
-            (db/transact! [[:db.fn/retractEntity [:file/path file-path]]])
-            (let [blocks (db/get-page-blocks page-name)
-                  tx-data (mapv
-                           (fn [block]
-                             [:db.fn/retractEntity [:block/uuid (:block/uuid block)]])
-                           blocks)]
-              (db/transact! tx-data)
-              ;; remove file
-              (->
-               (p/let [_ (or (config/local-db? repo) (git/remove-file repo file-path))
-                       _ (fs/unlink! repo (config/get-repo-path repo file-path) nil)]
-                 (common-handler/check-changed-files-status)
-                 (repo-handler/push-if-auto-enabled! repo))
-               (p/catch (fn [err]
-                          (js/console.error "error: " err))))))
+      (let [page-name (string/lower-case page-name)
+            blocks (db/get-page-blocks page-name)
+            tx-data (mapv
+                     (fn [block]
+                       [:db.fn/retractEntity [:block/uuid (:block/uuid block)]])
+                     blocks)]
+        (db/transact! tx-data)
 
+        (delete-file! repo page-name)
 
-          ;; if other page alias this pagename,
-          ;; then just remove some attrs of this entity instead of retractEntity
-          (if (model/get-alias-source-page (state/get-current-repo) page-name)
-            (when-let [id (:db/id (db/entity [:block/name page-name]))]
-              (let [txs (mapv (fn [attribute]
-                                [:db/retract id attribute])
-                              db-schema/retract-page-attributes)]
-                (db/transact! txs)))
-            (db/transact! [[:db.fn/retractEntity [:block/name page-name]]]))
+        ;; if other page alias this pagename,
+        ;; then just remove some attrs of this entity instead of retractEntity
+        (if (model/get-alias-source-page (state/get-current-repo) page-name)
+          (when-let [id (:db/id (db/entity [:block/name page-name]))]
+            (let [txs (mapv (fn [attribute]
+                              [:db/retract id attribute])
+                            db-schema/retract-page-attributes)]
+              (db/transact! txs)))
+          (db/transact! [[:db.fn/retractEntity [:block/name page-name]]]))
 
-          (ok-handler))))))
+        (ok-handler)))))
 
 (defn- compute-new-file-path
   [old-path new-page-name]
@@ -338,8 +340,9 @@
                        :file/path new-path})
             txs (->> [file-tx page-tx] (remove nil?))]
         (db/transact! repo txs)
-        (p/let [_ (rename-file-aux! repo old-path new-path)]
-          (println "Renamed " old-path " to " new-path))))))
+        (when (and old-path new-path)
+          (p/let [_ (rename-file-aux! repo old-path new-path)]
+            (println "Renamed " old-path " to " new-path)))))))
 
 (defn- rename-page-aux [old-name new-name]
   (when-let [repo (state/get-current-repo)]
@@ -365,71 +368,55 @@
                                   :block/original-name new-name}]
             page-txs            (if properties-block-tx (conj page-txs properties-block-tx) page-txs)]
 
-                    (d/transact! (db/get-conn repo false) page-txs)
+        (d/transact! (db/get-conn repo false) page-txs)
 
-                    (when (not= (util/page-name-sanity new-name) new-name)
-                      (page-add-property! new-name :title new-name))
+        (when (not= (util/page-name-sanity new-name) new-name)
+          (page-add-property! new-name :title new-name))
 
-                    (when (and file (not journal?))
-                      (rename-file! file new-name (fn [] nil)))
+        (when (and file (not journal?))
+          (rename-file! file new-name (fn [] nil)))
 
-                    ;; update all files which have references to this page
-                    (let [blocks   (db/get-page-referenced-blocks-no-cache (:db/id page))
-                          page-ids (->> (map :block/page blocks)
-                                        (remove nil?)
-                                        (set))
-                          tx       (->> (map (fn [{:block/keys [uuid title content properties] :as block}]
-                                               (let [title      (let [title' (walk-replace-old-page! title old-original-name new-name)]
-                                                                  (when-not (= title' title)
-                                                                    title'))
-                                                     content    (let [content' (replace-old-page! content old-original-name new-name)]
-                                                                  (when-not (= content' content)
-                                                                    content'))
-                                                     properties (let [properties' (walk-replace-old-page! properties old-original-name new-name)]
-                                                                  (when-not (= properties' properties)
-                                                                    properties'))]
-                                                 (when (or title content properties)
-                                                   (util/remove-nils-non-nested
-                                                    {:block/uuid       uuid
-                                                     :block/title      title
-                                                     :block/content    content
-                                                     :block/properties properties})))) blocks)
-                                        (remove nil?))]
-                      (db/transact! repo tx)
-                      (doseq [page-id page-ids]
-                        (outliner-file/sync-to-file page-id)))
+        ;; update all files which have references to this page
+        (let [blocks   (db/get-page-referenced-blocks-no-cache (:db/id page))
+              page-ids (->> (map :block/page blocks)
+                            (remove nil?)
+                            (set))
+              tx       (->> (map (fn [{:block/keys [uuid title content properties] :as block}]
+                                   (let [title      (let [title' (walk-replace-old-page! title old-original-name new-name)]
+                                                      (when-not (= title' title)
+                                                        title'))
+                                         content    (let [content' (replace-old-page! content old-original-name new-name)]
+                                                      (when-not (= content' content)
+                                                        content'))
+                                         properties (let [properties' (walk-replace-old-page! properties old-original-name new-name)]
+                                                      (when-not (= properties' properties)
+                                                        properties'))]
+                                     (when (or title content properties)
+                                       (util/remove-nils-non-nested
+                                        {:block/uuid       uuid
+                                         :block/title      title
+                                         :block/content    content
+                                         :block/properties properties})))) blocks)
+                            (remove nil?))]
+          (db/transact! repo tx)
+          (doseq [page-id page-ids]
+            (outliner-file/sync-to-file page-id)))
 
-                    (outliner-file/sync-to-file page))
+        (outliner-file/sync-to-file page))
 
-                  (rename-namespace-pages! repo old-name new-name)
+      (rename-namespace-pages! repo old-name new-name)
 
-                  ;; TODO: update browser history, remove the current one
+      ;; TODO: update browser history, remove the current one
 
-                  ;; Redirect to the new page
-                  (route-handler/redirect! {:to          :page
-                                            :push        false
-                                            :path-params {:name (string/lower-case new-name)}})
+      ;; Redirect to the new page
+      (route-handler/redirect! {:to          :page
+                                :push        false
+                                :path-params {:name (string/lower-case new-name)}})
 
-                  (notification/show! "Page renamed successfully!" :success)
-
-                  (repo-handler/push-if-auto-enabled! repo)
-
-                  (ui-handler/re-render-root!))))
-
-(defn rename-title-only [old-name new-name]
-  (when-let [page (db/pull [:block/name (string/lower-case old-name)])]
-    (let [page-name (string/lower-case old-name)
-          page-txs  [(-> page
-                        (select-keys [:db/id :block/uuid :block/name])
-                        (assoc :block/original-name new-name))]
-          repo      (state/get-current-repo)]
-      (d/transact! (db/get-conn repo false) page-txs)
-
-      (page-add-property! page-name :title new-name)
-
-      (outliner-file/sync-to-file page)
       (notification/show! "Page renamed successfully!" :success)
+
       (repo-handler/push-if-auto-enabled! repo)
+
       (ui-handler/re-render-root!))))
 
 (defn rename!
@@ -443,7 +430,7 @@
                name-changed?)
       (cond
         (= (string/lower-case old-name) (string/lower-case new-name))
-        (rename-title-only old-name new-name)
+        (rename-page-aux old-name new-name)
 
         (db/pull [:block/name (string/lower-case new-name)])
         (notification/show! "Page already exists!" :error)
@@ -506,7 +493,7 @@
   [repo page]
   (let [pages (or (db/get-key-value repo :recent/pages)
                   '())
-        new-pages (take 12 (distinct (cons page pages)))]
+        new-pages (take 10 (distinct (cons page pages)))]
     (db/set-key-value repo :recent/pages new-pages)))
 
 (defn template-exists?
@@ -608,7 +595,8 @@
                                           format
                                           {:last-pattern (str "[[" (if @editor-handler/*selected-text "" q))
                                            :end-pattern "]]"
-                                           :postfix-fn   (fn [s] (util/replace-first "]]" s ""))}))))))
+                                           :postfix-fn   (fn [s] (util/replace-first "]]" s ""))
+                                           :forward-pos 3}))))))
 
 (defn create-today-journal!
   []
@@ -638,3 +626,12 @@
                                 [page false false false])
                   :page-block page})
                 (ui-handler/re-render-root!)))))))))
+
+(defn open-today-in-sidebar
+  []
+  (when-let [page (db/entity [:block/name (string/lower-case (date/today))])]
+    (state/sidebar-add-block!
+     (state/get-current-repo)
+     (:db/id page)
+     :page
+     page)))

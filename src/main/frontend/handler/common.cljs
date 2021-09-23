@@ -1,23 +1,22 @@
 (ns frontend.handler.common
-  (:require [goog.object :as gobj]
-            [frontend.state :as state]
-            [cljs-bean.core :as bean]
-            [promesa.core :as p]
-            [frontend.util :as util]
-            [frontend.util.property :as property]
-            [frontend.git :as git]
-            [frontend.db :as db]
-            [frontend.encrypt :as e]
-            [lambdaisland.glogi :as log]
-            [cljs.reader :as reader]
-            [frontend.spec :as spec]
+  (:require [cljs-bean.core :as bean]
             [cljs-time.core :as t]
             [cljs-time.format :as tf]
+            [cljs.reader :as reader]
+            [clojure.string :as string]
+            [dommy.core :as d]
             [frontend.config :as config]
-            ["ignore" :as Ignore]
-            ["/frontend/utils" :as utils]
             [frontend.date :as date]
-            [clojure.string :as string]))
+            [frontend.db :as db]
+            [frontend.git :as git]
+            [frontend.spec :as spec]
+            [frontend.state :as state]
+            [frontend.util :as util]
+            [frontend.util.property :as property]
+            [goog.object :as gobj]
+            ["ignore" :as Ignore]
+            [lambdaisland.glogi :as log]
+            [promesa.core :as p]))
 
 (defn get-ref
   [repo-url]
@@ -213,3 +212,14 @@
                     (date/journal-day->ts journal-day)
                     (util/time-ms)))))
     pages))
+
+(defn show-custom-context-menu! [e context-menu-content]
+  (util/stop e)
+  (let [client-x (gobj/get e "clientX")
+        client-y (gobj/get e "clientY")
+        scroll-y (util/cur-doc-top)]
+    (state/show-custom-context-menu! context-menu-content)
+    (when-let [context-menu (d/by-id "custom-context-menu")]
+      (d/set-style! context-menu
+                    :left (str client-x "px")
+                    :top (str (+ scroll-y client-y) "px")))))

@@ -1,12 +1,12 @@
 (ns frontend.search.db
   (:refer-clojure :exclude [empty?])
-  (:require [frontend.text :as text]
-            [frontend.util.property :as property]
+  (:require [cljs-bean.core :as bean]
+            [clojure.string :as string]
             [frontend.db :as db]
             [frontend.state :as state]
-            [cljs-bean.core :as bean]
-            ["fuse.js" :as fuse]
-            [clojure.string :as string]))
+            [frontend.text :as text]
+            [frontend.util.drawer :as drawer]
+            ["fuse.js" :as fuse]))
 
 (defonce indices (atom nil))
 
@@ -17,7 +17,7 @@
 (defn block->index
   [{:block/keys [uuid content format page] :as block}]
   (when-let [result (->> (text/remove-level-spaces content format)
-                         (property/remove-built-in-properties format))]
+                         (drawer/remove-logbook))]
     {:id (:db/id block)
      :uuid (str uuid)
      :page page

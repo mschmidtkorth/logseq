@@ -1,17 +1,16 @@
 (ns frontend.components.widgets
-  (:require [rum.core :as rum]
-            [frontend.util :as util]
-            [frontend.handler.user :as user-handler]
-            [frontend.handler.repo :as repo-handler]
-            [frontend.handler.notification :as notification]
-            [frontend.handler.web.nfs :as nfs]
-            [frontend.handler.page :as page-handler]
-            [frontend.state :as state]
-            [clojure.string :as string]
-            [frontend.ui :as ui]
+  (:require [clojure.string :as string]
             [frontend.context.i18n :as i18n]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.page :as page-handler]
+            [frontend.handler.repo :as repo-handler]
+            [frontend.handler.user :as user-handler]
             [frontend.handler.web.nfs :as nfs]
-            [frontend.modules.shortcut.core :as shortcut]))
+            [frontend.modules.shortcut.core :as shortcut]
+            [frontend.state :as state]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [rum.core :as rum]))
 
 (rum/defc choose-preferred-format
   []
@@ -52,7 +51,7 @@
              :placeholder "https://github.com/username/repo"
              :on-change (fn [e]
                           (reset! repo (util/evalue e)))}]]
-          [:label.font-medium "Default Branch (make sure it's matched with your setting on Github): "]
+          [:label.font-medium "Default Branch (make sure it's matched with your setting on GitHub): "]
           [:div.mt-2.mb-4.relative.rounded-md.shadow-sm.max-w-xs
            [:input#branch.form-input.block.w-full.sm:text-sm.sm:leading-5
             {:value @branch
@@ -67,7 +66,7 @@
            (let [branch (string/trim @branch)]
              (if (string/blank? branch)
                (notification/show!
-                [:p.text-gray-700.dark:text-gray-300 "Please input a branch, make sure it's matched with your setting on Github."]
+                [:p.text-gray-700.dark:text-gray-300 "Please input a branch, make sure it's matched with your setting on GitHub."]
                 :error
                 false)
                (let [repo (util/lowercase-first @repo)]

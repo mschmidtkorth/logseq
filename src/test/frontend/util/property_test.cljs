@@ -1,5 +1,5 @@
 (ns frontend.util.property-test
-  (:require [cljs.test :refer [deftest is are testing]]
+  (:require [cljs.test :refer [are deftest testing]]
             [frontend.util.property :as property]))
 
 (deftest remove-id-property
@@ -146,5 +146,35 @@
     ":PROPERTIES:\n:title: a/b/c\n:END:\n"
     {:title "a/b/c" :tags "d,e"}
     ":PROPERTIES:\n:title: a/b/c\n:tags: d,e\n:END:\n"))
+
+(deftest test-with-built-in-properties
+  (let [content "#+BEGIN_QUERY\n{:title      \"cool NEXT\"\n    :query      [:find (pull ?h [*])\n                 :in $ ?start ?next\n                 :where\n                 [?h :block/marker ?marker]\n                 [(contains? #{\"NOW\" \"LATER\" \"TODO\"} ?marker)]\n                 [?h :block/ref-pages ?p]\n                 [?p :block/journal? true]\n                 [?p :block/journal-day ?d]\n                 [(> ?d ?start)]\n                 [(< ?d ?next)]]\n    :inputs     [:today :7d-after]\n    :collapsed? false}\n#+END_QUERY"]
+    (let [md-property "query-table:: true"]
+      (are [x y] (= (property/with-built-in-properties {:query-table true} x :markdown) y)
+       content
+       (str md-property "\n" content)
+
+       "title"
+       (str "title\n" md-property)
+
+       "title\nbody"
+       (str "title\n" md-property "\nbody")
+
+       "1. list"
+       (str md-property "\n1. list")))
+
+    (let [org-property ":PROPERTIES:\n:query-table: true\n:END:"]
+      (are [x y] (= (property/with-built-in-properties {:query-table true} x :org) y)
+       content
+       (str org-property "\n" content)
+
+       "title"
+       (str "title\n" org-property)
+
+       "title\nbody"
+       (str "title\n" org-property "\nbody")
+
+       "1. list"
+       (str org-property "\n1. list")))))
 
 #_(cljs.test/run-tests)

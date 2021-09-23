@@ -1,29 +1,22 @@
 (ns frontend.components.journal
-  (:require [rum.core :as rum]
-            [reitit.frontend.easy :as rfe]
-            [frontend.util :as util :refer [profile]]
+  (:require [clojure.string :as string]
+            [frontend.components.onboarding :as onboarding]
+            [frontend.components.page :as page]
+            [frontend.components.reference :as reference]
+            [frontend.components.widgets :as widgets]
             [frontend.config :as config]
             [frontend.date :as date]
-            [frontend.db-mixins :as db-mixins]
-            [frontend.handler.notification :as notification]
-            [frontend.handler.page :as page-handler]
-            [frontend.handler.editor :as editor-handler]
             [frontend.db :as db]
+            [frontend.db-mixins :as db-mixins]
             [frontend.db.model :as model]
+            [frontend.handler.page :as page-handler]
             [frontend.state :as state]
+            [frontend.text :as text]
             [frontend.ui :as ui]
-            [frontend.config :as config]
-            [frontend.components.content :as content]
-            [frontend.components.block :as block]
-            [frontend.components.editor :as editor]
-            [frontend.components.reference :as reference]
-            [frontend.components.page :as page]
-            [frontend.components.widgets :as widgets]
-            [frontend.components.onboarding :as onboarding]
+            [frontend.util :as util]
             [goog.object :as gobj]
-            [clojure.string :as string]
-            [frontend.handler.block :as block-handler]
-            [frontend.text :as text]))
+            [reitit.frontend.easy :as rfe]
+            [rum.core :as rum]))
 
 (rum/defc blocks-cp < rum/reactive db-mixins/query
   {}
@@ -47,9 +40,17 @@
                          (let [page-names (model/get-page-names-by-ids (map :db/id (:block/tags page)))]
                            (text/build-data-value page-names)))]
     [:div.flex-1.journal.page (cond->
-                               {:class (if intro? "intro" "")}
+                               {:class (if intro? "logseq-intro" "")}
                                 data-page-tags
                                 (assoc :data-page-tags data-page-tags))
+
+     (when intro?
+       (ui/admonition
+        :warning
+        [:p (util/format
+             "Feel free to edit anything, no change will be saved at this moment. If you do want to persist your work, click the \"Open\" button to open a local directory%s."
+             (if (util/electron?) "" " or connect Logseq to GitHub"))]))
+
      (ui/foldable
       [:a.initial-color.title.journal-title
        {:href     (rfe/href :page {:name page})
@@ -66,7 +67,9 @@
        [:h1.title
         (util/capitalize-all title)]]
 
-      (blocks-cp repo page format))
+      (blocks-cp repo page format)
+
+      {})
 
      (when intro? (widgets/add-graph))
 

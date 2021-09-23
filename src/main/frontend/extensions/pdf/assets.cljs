@@ -1,20 +1,18 @@
 (ns frontend.extensions.pdf.assets
-  (:require [rum.core :as rum]
-            [frontend.util :as util]
+  (:require [cljs.reader :as reader]
+            [clojure.string :as string]
+            [frontend.config :as config]
             [frontend.db.model :as db-model]
             [frontend.db.utils :as db-utils]
-            [frontend.handler.page :as page-handler]
-            [frontend.handler.editor :as editor-handler]
-            [frontend.state :as state]
-            [frontend.config :as config]
             [frontend.fs :as fs]
-            [frontend.components.svg :as svg]
-            [reitit.frontend.easy :as rfe]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.page :as page-handler]
+            [frontend.state :as state]
+            [frontend.util :as util]
             [medley.core :as medley]
-            [cljs.reader :as reader]
             [promesa.core :as p]
-            [clojure.string :as string]
-            [cljs-bean.core :as bean]))
+            [reitit.frontend.easy :as rfe]
+            [rum.core :as rum]))
 
 (defonce *asset-uploading? (atom false))
 
@@ -38,10 +36,10 @@
               full-path
 
               :else
-              (util/node-path.join
-                "file://"                                   ;; TODO: bfs
-                (config/get-repo-dir (state/get-current-repo))
-                "assets" filename))]
+              (str "file://"                                ;; TODO: bfs
+                   (util/node-path.join
+                     (config/get-repo-dir (state/get-current-repo))
+                     "assets" filename)))]
     (when-let [key
                (if web-link?
                  (str (hash url))
@@ -70,7 +68,7 @@
     (let [repo-cur (state/get-current-repo)
           repo-dir (config/get-repo-dir repo-cur)
           data (pr-str {:highlights highlights})]
-      (fs/write-file! repo-cur repo-dir hls-file data {:skip-mtime? true}))))
+      (fs/write-file! repo-cur repo-dir hls-file data {:skip-compare? true}))))
 
 (defn resolve-hls-data-by-key$
   [target-key]
@@ -89,16 +87,19 @@
           ^js canvas' (.createElement doc "canvas")
           dpr js/window.devicePixelRatio
           repo-cur (state/get-current-repo)
-          repo-dir (config/get-repo-dir repo-cur)]
+          repo-dir (config/get-repo-dir repo-cur)
+          dw (* dpr width)
+          dh (* dpr height)]
 
-      (set! (. canvas' -width) width)
-      (set! (. canvas' -height) height)
+      (set! (. canvas' -width) dw)
+      (set! (. canvas' -height) dh)
 
-      (when-let [^js ctx (.getContext canvas' "2d")]
+      (when-let [^js ctx (.getContext canvas' "2d" #js{:alpha false})]
+        (set! (. ctx -imageSmoothingEnabled) false)
         (.drawImage
           ctx canvas
           (* left dpr) (* top dpr) (* width dpr) (* height dpr)
-          0 0 width height)
+          0 0 dw dh)
 
         (let [callback (fn [^js png]
                          ;; write image file
@@ -115,7 +116,7 @@
                                    new-fpath (str fdir "/" fname "_" fstamp ".png")
                                    old-fpath (and old-fstamp (str fdir "/" fname "_" old-fstamp ".png"))
                                    _ (and old-fpath (apply fs/rename! repo-cur (map #(util/node-path.join repo-dir %) [old-fpath new-fpath])))
-                                   _ (fs/write-file! repo-cur repo-dir new-fpath png {:skip-mtime? true})]
+                                   _ (fs/write-file! repo-cur repo-dir new-fpath png {:skip-compare? true})]
 
                              (js/console.timeEnd :write-area-image))
 
@@ -226,6 +227,12 @@
   [{:keys [id]}]
   (when id
     (rfe/push-state :page {:name (str id)})))
+
+(defn goto-annotations-page!
+  ([current] (goto-annotations-page! current nil))
+  ([current id]
+   (when-let [name (:key current)]
+     (rfe/push-state :page {:name (str "hls__" name)} (if id {:anchor (str "block-content-" + id)} nil)))))
 
 (rum/defc area-display
   [block stamp]

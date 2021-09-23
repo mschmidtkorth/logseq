@@ -18,7 +18,8 @@
             [medley.core :as medley]
             [frontend.context.i18n :as i18n]
             [frontend.date :as date]
-            [reitit.frontend.easy :as rfe]))
+            [reitit.frontend.easy :as rfe]
+            [frontend.modules.shortcut.core :as shortcut]))
 
 (defn- partition-between
   "Split `coll` at positions where `pred?` is true."
@@ -37,8 +38,7 @@
               (not (util/safe-re-find #" " q)))
         (let [i (string/index-of lc-content lc-q)
               [before after] [(subs content 0 i) (subs content (+ i (count q)))]]
-          [:p
-           {:class "m-0"}
+          [:div
            (when-not (string/blank? before)
              [:span before])
            [:mark {:class "p-0 rounded-none"} (subs content i (+ i (count q)))]
@@ -121,8 +121,8 @@
         n (count content)
         [before after] (string/split content q-pattern 2)
         [before after] (if (>= n 64)
-                         [(if before (apply str (take-last 48 before)))
-                          (if after (apply str (take 48 after)))]
+                         [(when before (apply str (take-last 48 before)))
+                          (when after (apply str (take 48 after)))]
                          [before after])]
     [:p
      (when-not (string/blank? before)
@@ -130,11 +130,6 @@
      [:mark q]
      (when-not (string/blank? after)
        [:span after])]))
-
-(defn- leave-focus
-  []
-  (when-let [input (gdom/getElement "search-field")]
-    (.blur input)))
 
 (defonce search-timeout (atom nil))
 
@@ -165,22 +160,15 @@
                    (concat new-page pages files blocks))
           result (if (= search-mode :graph)
                    [{:type :graph-add-filter}]
-                   result)]
-      [:div.rounded-md.shadow-lg.search-ac
-       {:style (merge
-                {:top 48
-                 :left 32
-                 :height 400
-                 :width 700
-                 :max-width "100%"
-                 :overflow "auto"})
-        :class (if all? "search-all" "absolute")}
+                   result)
+          repo (state/get-current-repo)]
+      [:div
        (ui/auto-complete
         result
         {:class "search-results"
          :on-chosen (fn [{:keys [type data alias]}]
+                      (search-handler/add-search-to-recent! repo search-q)
                       (search-handler/clear-search!)
-                      (leave-focus)
                       (case type
                         :graph-add-filter
                         (state/add-graph-search-filter! search-q)
@@ -204,11 +192,12 @@
                             (route/redirect! {:to :page
                                               :path-params {:name (str block-uuid)}})
                             (let [page (:block/name (:block/page (db/entity [:block/uuid block-uuid])))]
-                             (route/redirect! {:to :page
-                                               :path-params {:name page}
-                                               :query-params {:anchor (str "ls-block-" (:block/uuid data))}}))))
+                              (route/redirect! {:to :page
+                                                :path-params {:name page}
+                                                :query-params {:anchor (str "ls-block-" (:block/uuid data))}}))))
                         nil))
          :on-shift-chosen (fn [{:keys [type data alias]}]
+                            (search-handler/add-search-to-recent! repo search-q)
                             (case type
                               :page
                               (let [data (or alias data)
@@ -274,19 +263,90 @@
                                                  (search-handler/clear-search!)))}
            (t :more)]])])))
 
-(rum/defcs search < rum/reactive
-  (rum/local false ::inside-box?)
+(rum/defc recent-search-and-pages
+  [in-page-search?]
+  [:div.recent-search
+   [:div.px-4.py-2.text-sm.opacity-70.flex.flex-row.justify-between.align-items
+    [:div "Recent search:"]
+    (ui/tippy {:html [:div.text-sm.font-medium
+                      "Shortcut: "
+                      [:code (util/->platform-shortcut "Ctrl + Shift + k")]]
+               :interactive     true
+               :arrow true}
+              [:div.flex-row.flex.align-items
+               [:div.mr-2 "Search in page:"]
+               [:div {:style {:margin-top 3}}
+                (ui/toggle in-page-search?
+                           (fn [_value]
+                             (state/set-search-mode! (if in-page-search? :global :page)))
+                           true)]
+               (ui/tippy {:html [:div
+                                 "Tip: " [:code (util/->platform-shortcut "Ctrl+Shift+p")] " to open the commands palette"]
+                          :interactive     true
+                          :arrow true}
+                         [:a.inline-block
+                          {:style {:margin-top 1
+                                   :margin-left 12}
+                           :on-click #(state/toggle! :ui/command-palette-open?)}
+                          (svg/icon-cmd 20)])])]
+   (let [recent-search (mapv (fn [q] {:type :search :data q}) (db/get-key-value :recent/search))
+         pages (->> (db/get-key-value :recent/pages)
+                    (remove nil?)
+                    (remove #(= (string/lower-case %) "contents"))
+                    (mapv (fn [page] {:type :page :data page})))
+         result (concat (take 5 recent-search) pages)]
+     (ui/auto-complete
+      result
+      {:on-chosen (fn [{:keys [type data]}]
+                    (case type
+                      :page
+                      (route/redirect! {:to :page
+                                        :path-params {:name data}})
+                      :search
+                      (let [q data]
+                        (state/set-q! q)
+                        (let [search-mode (state/get-search-mode)
+                              opts (if (= :page search-mode)
+                                     (let [current-page (or (state/get-current-page)
+                                                            (date/today))]
+                                       {:page-db-id (:db/id (db/entity [:block/name (string/lower-case current-page)]))})
+                                     {})]
+                          (if (= :page search-mode)
+                            (search-handler/search (state/get-current-repo) q opts)
+                            (search-handler/search (state/get-current-repo) q))))
+
+                      nil))
+       :on-shift-chosen (fn [{:keys [type data]}]
+                          (case type
+                            :page
+                            (let [page data]
+                              (when-let [page (db/pull [:block/name (string/lower-case page)])]
+                               (state/sidebar-add-block!
+                                (state/get-current-repo)
+                                (:db/id page)
+                                :page
+                                {:page page})))
+
+                            nil))
+       :item-render (fn [{:keys [type data]}]
+                      (case type
+                        :search [:div.flex-row.flex.search-item.font-medium
+                                 svg/search
+                                 [:span.ml-2 data]]
+                        :page (search-result-item "Page" data)
+                        nil))}))])
+
+(rum/defcs search-modal < rum/reactive
+  (shortcut/disable-all-shortcuts)
   (mixins/event-mixin
    (fn [state]
      (mixins/hide-when-esc-or-outside
       state
       :on-hide (fn []
-                 (search-handler/clear-search!)
-                 (leave-focus)))))
+                 (search-handler/clear-search!)))))
   [state]
   (let [search-result (state/sub :search/result)
         search-q (state/sub :search/q)
-        show-result? (boolean (seq search-result))
         blocks-count (or (db/blocks-count) 0)
         search-mode (state/sub :search/mode)
         timeout (cond
@@ -297,50 +357,48 @@
                   500
 
                   :else
-                  300)]
+                  300)
+        in-page-search? (= search-mode :page)]
     (rum/with-context [[t] i18n/*tongue-context*]
-      [:div#search.flex-1.flex.p-2
-       [:div.inner
-        [:label.sr-only {:for "search-field"} (t :search)]
-        [:div#search-wrapper.relative.w-full.text-gray-400.focus-within:text-gray-600
-         [:div.absolute.inset-y-0.flex.items-center.pointer-events-none {:style {:left 6}}
-          svg/search]
-         [:input#search-field.block.w-full.h-full.pr-3.py-2.rounded-md.focus:outline-none.placeholder-gray-500.focus:placeholder-gray-400.sm:text-sm.sm:bg-transparent
-          {:style {:padding-left "2rem"}
-           :placeholder (case search-mode
-                          :graph
-                          (t :graph-search)
-                          :page
-                          (t :page-search)
-                          (t :search))
-           :auto-complete (if (util/chrome?) "chrome-off" "off") ; off not working here
-           :default-value ""
-           :on-change (fn [e]
-                        (when @search-timeout
-                          (js/clearTimeout @search-timeout))
-                        (let [value (util/evalue e)]
-                          (if (string/blank? value)
-                            (search-handler/clear-search! false)
-                            (let [search-mode (state/get-search-mode)
-                                  opts (if (= :page search-mode)
-                                         (let [current-page (or (state/get-current-page)
-                                                                (date/today))]
-                                           {:page-db-id (:db/id (db/entity [:block/name (string/lower-case current-page)]))})
-                                         {})]
-                              (state/set-q! value)
-                              (reset! search-timeout
-                                      (js/setTimeout
-                                       (fn []
-                                         (if (= :page search-mode)
-                                           (search-handler/search (state/get-current-repo) value opts)
-                                           (search-handler/search (state/get-current-repo) value)))
-                                       timeout))))))}]
-         (when-not (string/blank? search-q)
-           (ui/css-transition
-            {:class-names "fade"
-             :timeout {:enter 500
-                       :exit 300}}
-            (search-auto-complete search-result search-q false)))]]])))
+      (let [input (::input state)]
+        [:div.cp__palette.cp__palette-main
+
+         [:div.input-wrap
+          [:input.cp__palette-input.w-full
+           {:type          "text"
+            :auto-focus    true
+            :placeholder   (case search-mode
+                             :graph
+                             (t :graph-search)
+                             :page
+                             (t :page-search)
+                             (t :search))
+            :auto-complete (if (util/chrome?) "chrome-off" "off") ; off not working here
+            :value         search-q
+            :on-change     (fn [e]
+                             (when @search-timeout
+                               (js/clearTimeout @search-timeout))
+                             (let [value (util/evalue e)]
+                               (if (string/blank? value)
+                                 (search-handler/clear-search! false)
+                                 (let [search-mode (state/get-search-mode)
+                                       opts (if (= :page search-mode)
+                                              (let [current-page (or (state/get-current-page)
+                                                                     (date/today))]
+                                                {:page-db-id (:db/id (db/entity [:block/name (string/lower-case current-page)]))})
+                                              {})]
+                                   (state/set-q! value)
+                                   (reset! search-timeout
+                                           (js/setTimeout
+                                            (fn []
+                                              (if (= :page search-mode)
+                                                (search-handler/search (state/get-current-repo) value opts)
+                                                (search-handler/search (state/get-current-repo) value)))
+                                            timeout))))))}]]
+         [:div.search-results-wrap
+          (if (seq search-result)
+            (search-auto-complete search-result search-q false)
+            (recent-search-and-pages in-page-search?))]]))))
 
 (rum/defc more < rum/reactive
   [route]

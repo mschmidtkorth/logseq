@@ -1,22 +1,20 @@
 (ns frontend.db.query-dsl
-  (:require [cljs.reader :as reader]
-            [frontend.db.utils :as db-utils]
-            [datascript.core :as d]
-            [lambdaisland.glogi :as log]
-            [clojure.string :as string]
-            [frontend.text :as text]
-            [frontend.db.query-react :as react]
-            [frontend.db.model :as model]
-            [frontend.date :as date]
+  (:require [cljs-time.coerce :as tc]
             [cljs-time.core :as t]
-            [cljs-time.coerce :as tc]
-            [frontend.util :as util]
-            [medley.core :as medley]
-            [clojure.walk :as walk]
+            [cljs.reader :as reader]
             [clojure.core]
             [clojure.set :as set]
+            [clojure.string :as string]
+            [clojure.walk :as walk]
+            [frontend.date :as date]
+            [frontend.db.model :as model]
+            [frontend.db.query-react :as react]
+            [frontend.db.utils :as db-utils]
             [frontend.template :as template]
-            [frontend.util.property :as property]))
+            [frontend.text :as text]
+            [frontend.util :as util]
+            [frontend.util.property :as property]
+            [lambdaisland.glogi :as log]))
 
 
 ;; Query fields:
@@ -319,9 +317,17 @@
            nil))
 
        (= 'page fe)
-       (let [page-name (string/lower-case (first (rest e)))
+       (let [page-name (string/lower-case (str (first (rest e))))
              page-name (text/page-ref-un-brackets! page-name)]
          [['?b :block/page [:block/name page-name]]])
+
+       (and (= 'namespace fe)
+            (= 2 (count e)))
+       (let [page-name (string/lower-case (str (first (rest e))))
+             page (text/page-ref-un-brackets! page-name)]
+         (when-not (string/blank? page)
+           [['?p :block/namespace '?parent]
+            ['?parent :block/name page]]))
 
        (= 'page-property fe)
        (let [[k v] (rest e)
@@ -471,7 +477,7 @@
                               {:query query})
                              (merge
                               query-opts
-                              (if sort-by
+                              (when sort-by
                                 {:transform-fn sort-by}))))))))
 
 (comment

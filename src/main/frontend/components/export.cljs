@@ -10,7 +10,7 @@
   []
   (when-let [current-repo (state/get-current-repo)]
     (rum/with-context [[t] i18n/*tongue-context*]
-      [:div.export.w-96
+      [:div.export
        [:h1.title "Export"]
 
        [:ul.mr-1
@@ -48,7 +48,7 @@
   (when-let [current-repo (state/get-current-repo)]
     (when-let [page (state/get-current-page)]
       (rum/with-context [[t] i18n/*tongue-context*]
-        [:div.export.w-96
+        [:div.export
          [:h1.title "Export"]
          [:ul.mr-1
           [:li.mb-4
@@ -76,8 +76,8 @@
   [state root-block-ids]
   (let [current-repo (state/get-current-repo)
         type (rum/react *export-block-type)
-        text-indent-style (rum/react (state/get-export-block-text-indent-style))
-        text-remove-options (rum/react (state/get-export-block-text-remove-options))
+        text-indent-style (state/sub :copy/export-block-text-indent-style)
+        text-remove-options (state/sub :copy/export-block-text-remove-options)
         copied? (::copied? state)
         content
         (case type
@@ -85,7 +85,7 @@
           :opml (export/export-blocks-as-opml current-repo root-block-ids)
           :html (export/export-blocks-as-html current-repo root-block-ids)
           (export/export-blocks-as-markdown current-repo root-block-ids text-indent-style (into [] text-remove-options)))]
-    [:div.export.w-96.resize
+    [:div.export.resize
      [:div
       {:class "mb-2"}
       (ui/button "Text"
@@ -112,7 +112,7 @@
                             :visibility (if (= :text type) "visible" "hidden")}
                 :on-change (fn [e]
                              (let [value (util/evalue e)]
-                               (reset! (state/get-export-block-text-indent-style) value)))}
+                               (state/set-export-block-text-indent-style! value)))}
                (for [{:keys [label value selected]} options]
                  [:option (cond->
                            {:key   label
@@ -124,11 +124,8 @@
          (ui/checkbox {:style {:margin-right 6
                                :visibility (if (= :text type) "visible" "hidden")}
                        :checked (contains? text-remove-options :page-ref)
-                       :on-change (fn [e] (if (util/echecked? e)
-                                            (swap! (state/get-export-block-text-remove-options)
-                                                   #(conj % :page-ref))
-                                            (swap! (state/get-export-block-text-remove-options)
-                                                   #(disj % :page-ref))))})
+                       :on-change (fn [e]
+                                    (state/update-export-block-text-remove-options! e :page-ref))})
 
          [:div
           {:style {:visibility (if (= :text type) "visible" "hidden")}}
@@ -137,11 +134,8 @@
                                :margin-left 10
                                :visibility (if (= :text type) "visible" "hidden")}
                        :checked (contains? text-remove-options :emphasis)
-                       :on-change (fn [e] (if (util/echecked? e)
-                                            (swap! (state/get-export-block-text-remove-options)
-                                                   #(conj % :emphasis))
-                                            (swap! (state/get-export-block-text-remove-options)
-                                                   #(disj % :emphasis))))})
+                       :on-change (fn [e]
+                                    (state/update-export-block-text-remove-options! e :emphasis))})
 
          [:div
           {:style {:visibility (if (= :text type) "visible" "hidden")}}

@@ -1,6 +1,6 @@
 (ns frontend.text-test
-  (:require [frontend.text :as text]
-            [cljs.test :refer [deftest is are testing use-fixtures]]))
+  (:require [cljs.test :refer [are deftest testing]]
+            [frontend.text :as text]))
 
 (deftest page-ref?
   []
@@ -82,5 +82,23 @@
       "*foobar" "foobar"
       "**foobar" "foobar"
       "*********************foobar" "foobar")))
+
+(deftest test-add-timestamp
+  []
+  (are [x y] (= x y)
+    (text/add-timestamp "LATER hello world\nhello"
+                        "scheduled"
+                        "<2021-08-25 Wed>")
+    "LATER hello world\nSCHEDULED: <2021-08-25 Wed>\nhello"
+
+    (text/add-timestamp "LATER hello world "
+                        "scheduled"
+                        "<2021-08-25 Wed>")
+    "LATER hello world\nSCHEDULED: <2021-08-25 Wed>"
+
+    (text/add-timestamp "LATER hello world\nfoo:: bar\ntest"
+                        "scheduled"
+                        "<2021-08-25 Wed>")
+    "LATER hello world\nSCHEDULED: <2021-08-25 Wed>\nfoo:: bar\ntest"))
 
 #_(cljs.test/test-ns 'frontend.text-test)

@@ -19,6 +19,14 @@
    (string/starts-with? s "((")
    (string/ends-with? s "))")))
 
+(defn extract-page-name-from-ref
+  [ref]
+  (when-not (string/blank? ref)
+    (if-let [matches (or (re-matches #"\[\[file:.+\]\[(.+)\]\]" ref)
+                         (re-matches #"\[\[(.+)\]\]" ref))]
+      (string/trim (last matches))
+      ref)))
+
 (defonce page-ref-re #"\[\[(.*?)\]\]")
 
 (defonce page-ref-re-2 #"(\[\[.*?\]\])")
@@ -222,3 +230,54 @@
         (when-let [last-part (last (string/split p #"/"))]
           ;; a file
           (string/includes? last-part ".")))))
+
+(defn add-timestamp
+  [content key value]
+  (let [new-line (str (string/upper-case key) ": " value)
+        lines (string/split-lines content)
+        new-lines (map (fn [line]
+                         (string/trim
+                          (if (string/starts-with? (string/lower-case line) key)
+                            new-line
+                            line)))
+                    lines)
+        new-lines (if (not= (map string/trim lines) new-lines)
+                    new-lines
+                    (cons (first new-lines) ;; title
+                          (cons
+                           new-line
+                           (rest new-lines))))]
+    (string/join "\n" new-lines)))
+
+(defn remove-timestamp
+  [content key]
+  (let [lines (string/split-lines content)
+        new-lines (filter (fn [line]
+                            (not (string/starts-with? (string/lower-case line) key)))
+                          lines)]
+    (string/join "\n" new-lines)))
+
+(defn beginning-of-line
+  [content pos]
+  (or (zero? pos)
+      (when-let [pre-char (subs content (dec pos) pos)]
+        (println "pre-char: " pre-char)
+        (= pre-char \newline))))
+
+(defn end-of-line
+  [content pos]
+  (or (= pos (count content))
+      (when-let [next-char (subs content pos (inc pos))]
+        (= next-char \newline))))
+
+(defn goto-end-of-line
+  [content pos]
+  (when-not (end-of-line content pos)
+    (or (string/index-of content \newline pos)
+        (count content))))
+
+(defn goto-beginning-of-line
+  [content pos]
+  (when-not (beginning-of-line content pos)
+    (or (string/last-index-of content \newline pos)
+        0)))

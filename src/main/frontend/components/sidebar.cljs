@@ -1,6 +1,7 @@
 (ns frontend.components.sidebar
   (:require [cljs-drag-n-drop.core :as dnd]
             [clojure.string :as string]
+            [frontend.components.command-palette :as command-palette]
             [frontend.components.header :as header]
             [frontend.components.journal :as journal]
             [frontend.components.repo :as repo]
@@ -13,9 +14,7 @@
             [frontend.db :as db]
             [frontend.db-mixins :as db-mixins]
             [frontend.handler.editor :as editor-handler]
-            [frontend.handler.repo :as repo-handler]
             [frontend.handler.route :as route-handler]
-            [frontend.handler.web.nfs :as nfs-handler]
             [frontend.mixins :as mixins]
             [frontend.modules.shortcut.data-helper :as shortcut-dh]
             [frontend.state :as state]
@@ -80,7 +79,7 @@
               "translate-x-0"
               "-translate-x-full")
      :style {:max-width "86vw"}}
-    (if @open?
+    (when @open?
       [:div.absolute.top-0.right-0.p-1
        [:button#close-left-bar.close-panel-btn.flex.items-center.justify-center.h-12.w-12.rounded-full.focus:outline-none.focus:bg-gray-600
         {:on-click close-fn}
@@ -113,9 +112,7 @@
                      [:div#sidebar-nav-wrapper.flex-col.pt-4.hidden.sm:block
                       {:style {:flex (if (state/get-left-sidebar-open?)
                                        "0 1 20%"
-                                       "0 0 0px")
-                               :border-right (str "1px solid "
-                                                  (if white? "#f0f8ff" "#073642"))}}
+                                       "0 0 0px")}}
                       (when (state/sub :ui/left-sidebar-open?)
                         (sidebar-nav route-match nil))]
                      [:div#main-content-container.w-full.flex.justify-center
@@ -295,7 +292,9 @@
      (mixins/listen state js/window "keydown"
                     (fn [e]
                       (when (= 27 (.-keyCode e))
-                        (hide-context-menu-and-clear-selection))))))
+                        (if (state/modal-opened?)
+                          (state/close-modal!)
+                          (hide-context-menu-and-clear-selection)))))))
   [state route-match main-content]
   (let [{:keys [open? close-fn open-fn]} state
         close-fn (fn []
@@ -318,7 +317,8 @@
         default-home (get-default-home-if-valid)]
     (rum/with-context [[t] i18n/*tongue-context*]
       (theme/container
-       {:theme         theme
+       {:t             t
+        :theme         theme
         :route         route-match
         :current-repo  current-repo
         :nfs-granted?  granted?
@@ -366,6 +366,7 @@
                          (ui/notification)
                          (ui/modal)
                          (settings-modal)
+                         (command-palette/command-palette-modal)
                          (custom-context-menu)
                          [:a#download.hidden]
                          (when

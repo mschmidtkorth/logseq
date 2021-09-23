@@ -1,51 +1,42 @@
 (ns frontend.components.page
-  (:require [rum.core :as rum]
-            [frontend.util :as util :refer [profile]]
-            [frontend.util.marker :as marker]
-            [frontend.tools.html-export :as html-export]
-            [frontend.handler.page :as page-handler]
-            [frontend.handler.ui :as ui-handler]
-            [frontend.handler.common :as common-handler]
-            [frontend.commands :as commands]
-            [frontend.handler.plugin :as plugin-handler]
-            [frontend.handler.route :as route-handler]
-            [frontend.handler.graph :as graph-handler]
-            [frontend.handler.notification :as notification]
-            [frontend.handler.editor :as editor-handler]
-            [frontend.handler.config :as config-handler]
-            [frontend.state :as state]
+  (:require [cljs.pprint :as pprint]
             [clojure.string :as string]
+            [frontend.commands :as commands]
             [frontend.components.block :as block]
+            [frontend.components.content :as content]
             [frontend.components.editor :as editor]
+            [frontend.components.export :as export]
+            [frontend.components.hierarchy :as hierarchy]
             [frontend.components.plugins :as plugins]
             [frontend.components.reference :as reference]
             [frontend.components.svg :as svg]
-            [frontend.components.export :as export]
+            [frontend.config :as config]
+            [frontend.context.i18n :as i18n]
+            [frontend.date :as date]
+            [frontend.db :as db]
+            [frontend.db-mixins :as db-mixins]
+            [frontend.db.model :as model]
             [frontend.extensions.graph :as graph]
             [frontend.extensions.pdf.assets :as pdf-assets]
-            [frontend.components.hierarchy :as hierarchy]
-            [frontend.ui :as ui]
-            [frontend.components.content :as content]
-            [frontend.config :as config]
-            [frontend.db :as db]
-            [frontend.db.model :as model]
-            [frontend.db.utils :as db-utils]
-            [frontend.mixins :as mixins]
-            [frontend.db-mixins :as db-mixins]
-            [goog.dom :as gdom]
-            [goog.object :as gobj]
-            [frontend.utf8 :as utf8]
-            [frontend.date :as date]
             [frontend.format.mldoc :as mldoc]
-            [cljs-time.coerce :as tc]
-            [cljs-time.core :as t]
-            [cljs.pprint :as pprint]
-            [frontend.context.i18n :as i18n]
-            [reitit.frontend.easy :as rfe]
-            [frontend.text :as text]
+            [frontend.handler.common :as common-handler]
+            [frontend.handler.config :as config-handler]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.graph :as graph-handler]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.page :as page-handler]
+            [frontend.handler.plugin :as plugin-handler]
+            [frontend.handler.route :as route-handler]
+            [frontend.handler.shell :as shell]
+            [frontend.mixins :as mixins]
             [frontend.modules.shortcut.core :as shortcut]
-            [frontend.handler.block :as block-handler]
-            [cljs-bean.core :as bean]))
+            [frontend.state :as state]
+            [frontend.text :as text]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [goog.object :as gobj]
+            [reitit.frontend.easy :as rfe]
+            [rum.core :as rum]))
 
 (defn- get-page-name
   [state]
@@ -113,7 +104,7 @@
   (rum/local false ::show?)
   [state page-name]
   (let [show? (::show? state)]
-    [:div.ls-block.flex-1.flex-col.rounded-sm.add-button
+    [:div.flex-1.flex-col.rounded-sm.add-button
      [:div.flex.flex-row
       [:div.block {:style {:height      24
                            :width       24
@@ -229,7 +220,7 @@
   [state title page-name close-fn]
   (let [input (get state ::input)]
     (rum/with-context [[t] i18n/*tongue-context*]
-      [:div.w-full.sm:max-w-lg.sm:w-96
+      [:div
        [:div.sm:flex.sm:items-start
         [:div.mt-3.text-center.sm:mt-0.sm:text-left
          [:h3#modal-headline.text-lg.leading-6.font-medium
@@ -249,7 +240,7 @@
            :on-click (fn []
                        (let [value (string/trim @input)]
                          (when-not (string/blank? value)
-                           (page-handler/rename! page-name value)
+                           (page-handler/rename! (or title page-name) value)
                            (state/close-modal!))))}
           (t :submit)]]
         [:span.mt-3.flex.w-full.rounded-md.shadow-sm.sm:mt-0.sm:w-auto
@@ -275,7 +266,8 @@
           (for [[original-name name] pages]
             [:li {:key (str "tagged-page-" name)}
              [:a {:href (rfe/href :page {:name name})}
-              original-name]])] false)]])))
+              original-name]])]
+         {:default-collapsed? false})]])))
 
 (defn page-menu
   [repo t page page-name page-original-name title journal? public? developer-mode?]
@@ -319,6 +311,12 @@
                                       page-name
                                       (if public? false true))
                                      (state/close-modal!))}})
+
+                      (when (util/electron?)
+                        {:title   (t :page/version-history)
+                         :options {:on-click
+                                   (fn []
+                                     (shell/get-file-latest-git-log page 100))}})
 
                       (when plugin-handler/lsp-enabled?
                         (for [[_ {:keys [key label] :as cmd} action pid] (state/get-plugins-commands-with-type :page-menu-item)]
@@ -368,6 +366,7 @@
                               page-name)]
                    (db/get-page-format page))
           journal? (db/journal-page? page-name)
+          fmt-journal? (boolean (date/journal-title->int page-name))
           sidebar? (:sidebar? option)]
       (rum/with-context [[t] i18n/*tongue-context*]
         (let [route-page-name path-page-name
@@ -389,10 +388,14 @@
                       (= page-name (string/lower-case (date/journal-name))))
               developer-mode? (state/sub [:ui/developer-mode?])
               public? (true? (:public properties))]
-          [:div.flex-1.page.relative (if (seq (:block/tags page))
-                                       (let [page-names (model/get-page-names-by-ids (map :db/id (:block/tags page)))]
-                                         {:data-page-tags (text/build-data-value page-names)})
-                                       {})
+          [:div.flex-1.page.relative
+           (merge (if (seq (:block/tags page))
+                    (let [page-names (model/get-page-names-by-ids (map :db/id (:block/tags page)))]
+                      {:data-page-tags (text/build-data-value page-names)})
+                    {})
+
+             {:class (util/classnames [{:is-journals (or journal? fmt-journal?)}])})
+
            [:div.relative
             (when (and (not sidebar?)
                        (not block?))
@@ -418,17 +421,13 @@
                                   page-name
                                   path-page-name))]
                     (if (pdf-assets/hls-file? title)
-                      (pdf-assets/human-hls-filename-display title) title))]]]
+                      (pdf-assets/human-hls-filename-display title)
+                      (if fmt-journal? (date/journal-title->custom-format title) title)))]]]
                (when (not config/publishing?)
                  [:div.flex.flex-row
                   (when plugin-handler/lsp-enabled?
                     (plugins/hook-ui-slot :page-head-actions-slotted nil)
                     (plugins/hook-ui-items :pagebar))
-
-                  [:a.opacity-60.hover:opacity-100.page-op.mr-1
-                   {:title "Search in current page"
-                    :on-click #(route-handler/go-to-search! :page)}
-                   svg/search]
 
                   (page-menu repo t page page-name page-original-name title
                              journal? public? developer-mode?)])])
@@ -497,7 +496,7 @@
 (defonce *focus-nodes (atom []))
 (defonce *graph-reset? (atom false))
 (defonce *journal? (atom nil))
-(defonce *orphan-pages? (atom nil))
+(defonce *orphan-pages? (atom true))
 (defonce *builtin-pages? (atom nil))
 
 (rum/defc graph-filters < rum/reactive
@@ -680,7 +679,7 @@
                    (state/set-search-mode! :global)
                    state)}
   [state]
-  (let [settings (state/sub-graph-config)
+  (let [settings (state/sub-graph-config-settings)
         theme (state/sub :ui/theme)
         graph (graph-handler/build-global-graph theme settings)
         search-graph-filters (state/sub :search/graph-filters)

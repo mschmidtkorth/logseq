@@ -1,29 +1,22 @@
 (ns frontend.components.header
-  (:require [rum.core :as rum]
-            [reitit.frontend.easy :as rfe]
-            [clojure.string :as string]
-            [frontend.db :as db]
-            [frontend.ui :as ui]
-            [frontend.util :as util]
-            [frontend.state :as state]
-            [frontend.storage :as storage]
+  (:require [frontend.components.export :as export]
+            [frontend.components.plugins :as plugins]
+            [frontend.components.repo :as repo]
+            [frontend.components.right-sidebar :as sidebar]
+            [frontend.components.search :as search]
+            [frontend.components.svg :as svg]
             [frontend.config :as config]
             [frontend.context.i18n :as i18n]
-            [frontend.handler.ui :as ui-handler]
-            [frontend.handler.user :as user-handler]
-            [frontend.handler.plugin :as plugin-handler]
-            [frontend.components.svg :as svg]
-            [frontend.components.repo :as repo]
-            [frontend.components.search :as search]
-            [frontend.components.export :as export]
-            [frontend.components.plugins :as plugins]
-            [frontend.components.right-sidebar :as sidebar]
-            [frontend.modules.shortcut.core :as shortcut]
             [frontend.handler.page :as page-handler]
+            [frontend.handler.plugin :as plugin-handler]
+            [frontend.handler.user :as user-handler]
             [frontend.handler.web.nfs :as nfs]
-            [frontend.mixins :as mixins]
-            [goog.dom :as gdom]
-            [goog.object :as gobj]))
+            [frontend.modules.shortcut.core :as shortcut]
+            [frontend.state :as state]
+            [frontend.ui :as ui]
+            [frontend.util :as util]
+            [reitit.frontend.easy :as rfe]
+            [rum.core :as rum]))
 
 (rum/defc logo < rum/reactive
   [{:keys [white? electron-mac?]}]
@@ -36,9 +29,9 @@
    (if electron-mac?
      svg/home
      (if-let [logo (and config/publishing?
-                       (get-in (state/get-config) [:project :logo]))]
-      [:img.cp__header-logo-img {:src logo}]
-      (svg/logo (not white?))))])
+                        (get-in (state/get-config) [:project :logo]))]
+       [:img.cp__header-logo-img {:src logo}]
+       (svg/logo (not white?))))])
 
 (rum/defc login
   [logged?]
@@ -48,10 +41,10 @@
 
       (ui/dropdown-with-links
        (fn [{:keys [toggle-fn]}]
-         [:a.fade-link.block.p-2 {:on-click toggle-fn}
+         [:a.button.text-sm.font-medium.block {:on-click toggle-fn
+                                               :style {:margin-right 12}}
           [:span (t :login)]])
-       (let [list [
-                   ;; {:title (t :login-google)
+       (let [list [;; {:title (t :login-google)
                    ;;  :url (str config/website "/login/google")}
                    {:title (t :login-github)
                     :url (str config/website "/login/github")}]]
@@ -87,11 +80,7 @@
         {:on-click toggle-fn}
         (svg/horizontal-dots nil)])
      (->>
-      [(when-not (util/mobile?)
-         {:title (t :shortcut.ui/toggle-right-sidebar)
-          :options {:on-click state/toggle-sidebar-open?!}})
-
-       (when current-repo
+      [(when current-repo
          {:title (t :cards-view)
           :options {:on-click #(state/pub-event! [:modal/show-cards])}})
 
@@ -115,12 +104,14 @@
           :options {:href (rfe/href :all-journals)}
           :icon svg/calendar-sm})
 
+       {:hr true}
+
        (when-not (state/publishing-enable-editing?)
          {:title (t :settings)
           :options {:on-click state/open-settings!}
           :icon svg/settings-sm})
 
-       (when developer-mode?
+       (when (and developer-mode? (util/electron?))
          {:title (t :plugins)
           :options {:href (rfe/href :plugins)}})
 
@@ -169,7 +160,10 @@
         repos (->> (state/sub [:me :repos])
                    (remove #(= (:url %) config/local-repo)))
         electron-mac? (and util/mac? (util/electron?))
-        electron-not-mac? (and (util/electron?) (not electron-mac?))]
+        electron-not-mac? (and (util/electron?) (not electron-mac?))
+        show-open-folder? (and (nfs/supported?) (empty? repos)
+                               (not config/publishing?))
+        refreshing? (state/sub :nfs/refreshing?)]
     (rum/with-context [[t] i18n/*tongue-context*]
       [:div.cp__header#head
        {:class (when electron-mac? "electron-mac")
@@ -187,31 +181,46 @@
 
        (when electron-not-mac? (back-and-forward))
 
-       (if current-repo
-         (search/search)
-         [:div.flex-1])
+       [:div.flex-1.flex]
+
+       (when current-repo
+         (ui/tippy
+          {:html [:div.text-sm.font-medium
+                  "Shortcut: "
+                  [:code (util/->platform-shortcut "Ctrl + k")]]
+           :interactive     true
+           :arrow true}
+          [:a.button#search-button
+           {:on-click #(state/pub-event! [:go/search])}
+           svg/search]))
+
+       (when plugin-handler/lsp-enabled?
+         (plugins/hook-ui-items :toolbar))
+
+       [:a (when refreshing?
+             [:div {:class "animate-spin-reverse"}
+              svg/refresh])]
 
        (when electron-mac?
          (logo {:white? white?
                 :electron-mac? true}))
-
        (when electron-mac? (back-and-forward true))
 
        (new-block-mode)
 
+       (when refreshing?
+         [:div {:class "animate-spin-reverse"}
+          svg/refresh])
+
        (when-not (util/electron?)
          (login logged?))
-
-       (when plugin-handler/lsp-enabled?
-         (plugins/hook-ui-items :toolbar))
 
        (repo/sync-status current-repo)
 
        [:div.repos
         (repo/repos-dropdown nil)]
 
-       (when (and (nfs/supported?) (empty? repos)
-                  (not config/publishing?))
+       (when show-open-folder?
          [:a.text-sm.font-medium.button
           {:on-click #(page-handler/ls-dir-files! shortcut/refresh!)}
           [:div.flex.flex-row.text-center.open-button__inner.items-center
@@ -220,7 +229,7 @@
              [:span.ml-1 {:style {:margin-top (if electron-mac? 0 2)}}
               (t :open)])]])
 
-       (if config/publishing?
+       (when config/publishing?
          [:a.text-sm.font-medium.button {:href (rfe/href :graph)}
           (t :graph)])
 
